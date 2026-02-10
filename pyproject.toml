@@ -1,0 +1,44 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cs4100-crowd-navigation"
+version = "0.1.0"
+description = "Simulation sandbox for crowd-aware robot navigation experiments."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = [
+  "pygame>=2.5,<3",
+  "numpy>=1.26,<3",
+]
+
+[project.optional-dependencies]
+analysis = [
+  "matplotlib>=3.8,<4",
+  "pandas>=2.2,<3",
+  "seaborn>=0.13,<1",
+]
+rl = [
+  "torch>=2.2,<3",
+  "gymnasium>=0.29,<1",
+]
+crowd = [
+  "pyRVO>=0.4.3,<1",
+]
+dev = [
+  "pytest>=8.0,<9",
+  "ruff>=0.6,<1",
+]
+
+[project.scripts]
+crowd-sim = "crowd_navigation.main:run"
+
+[tool.setuptools]
+package-dir = {"" = "src"}
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

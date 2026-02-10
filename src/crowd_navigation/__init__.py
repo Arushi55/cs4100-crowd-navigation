@@ -1,0 +1,2 @@
+"""Crowd navigation simulation package."""
+
