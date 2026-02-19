@@ -7,8 +7,37 @@ import pygame
 from .constants import HEIGHT, WIDTH
 from .pedestrian import Pedestrian
 from .robot import Robot
+
 FPS = 60
 BACKGROUND_COLOR = (245, 247, 240)
+HUD_TEXT_COLOR = (45, 45, 45)
+
+CLOSE_RADIUS = 48
+NEAR_PENALTY = 0.1
+OVERLAP_PENALTY_LOW = 0.5
+OVERLAP_PENALTY_MID = 1.0
+OVERLAP_PENALTY_HIGH = 1.5
+
+
+def compute_penalty(robot: Robot, pedestrians: list[Pedestrian]) -> float:
+    frame_penalty = 0.0
+
+    for ped in pedestrians:
+        distance = pygame.Vector2(robot.x - ped.x, robot.y - ped.y).length()
+        overlap_distance = robot.radius + ped.radius
+
+        if distance < overlap_distance:
+            overlap_ratio = (overlap_distance - distance) / overlap_distance
+            if overlap_ratio < 0.33:
+                frame_penalty += OVERLAP_PENALTY_LOW
+            elif overlap_ratio < 0.66:
+                frame_penalty += OVERLAP_PENALTY_MID
+            else:
+                frame_penalty += OVERLAP_PENALTY_HIGH
+        elif distance < CLOSE_RADIUS:
+            frame_penalty += NEAR_PENALTY
+
+    return frame_penalty
 
 def generate_pedestrians(count: int = 12) -> list[Pedestrian]:
     return [
@@ -27,10 +56,12 @@ def run() -> None:
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption("Crowd Navigation Sandbox")
     clock = pygame.time.Clock()
+    font = pygame.font.Font(None, 32)
 
     goal_pos = pygame.Vector2(WIDTH - 80, HEIGHT // 2)
     pedestrians = generate_pedestrians()
     robot = Robot()
+    total_penalty = 0.0
 
     running = True
     while running:
@@ -55,11 +86,16 @@ def run() -> None:
         for ped in pedestrians:
             ped.update()
 
+        total_penalty += compute_penalty(robot, pedestrians)
+
         screen.fill(BACKGROUND_COLOR)
         pygame.draw.circle(screen, (245, 130, 40), goal_pos, 16)
         robot.draw(screen)
         for ped in pedestrians:
             ped.draw(screen)
+
+        penalty_label = font.render(f"Penalty: {total_penalty:.1f}", True, HUD_TEXT_COLOR)
+        screen.blit(penalty_label, (20, 20))
 
         pygame.display.flip()
         clock.tick(FPS)
