@@ -7,8 +7,8 @@ ROBOT_COLOR = (45, 90, 255)
 
 @dataclass
 class Robot:
-    x: float = HEIGHT // 2
-    y: float = WIDTH // 2
+    x: float = 80.0
+    y: float =  80.0
     speed: float = 3.0
     radius: int = 12
 
