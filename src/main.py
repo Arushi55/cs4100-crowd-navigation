@@ -5,9 +5,9 @@ import random
 import pygame
 
 from constants import HEIGHT, WIDTH
-from pedestrian import Pedestrian
-from robot import Robot
-from behaviors import BEHAVIORS, ControlMode
+from environment.pedestrian import Pedestrian
+from environment.robot import Robot
+from agent.behaviors import BEHAVIORS, ControlMode
 
 FPS = 60
 BACKGROUND_COLOR = (245, 247, 240)

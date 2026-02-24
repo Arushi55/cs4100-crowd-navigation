@@ -1,4 +1,4 @@
-from crowd_navigation.main import generate_pedestrians
+from main import generate_pedestrians
 
 
 def test_generate_pedestrians_count() -> None:
