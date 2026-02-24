@@ -4,9 +4,10 @@ from __future__ import annotations
 import random
 import pygame
 
-from .constants import HEIGHT, WIDTH
-from .pedestrian import Pedestrian
-from .robot import Robot
+from constants import HEIGHT, WIDTH
+from pedestrian import Pedestrian
+from robot import Robot
+from behaviors import BEHAVIORS, ControlMode
 
 FPS = 60
 BACKGROUND_COLOR = (245, 247, 240)
@@ -14,9 +15,12 @@ HUD_TEXT_COLOR = (45, 45, 45)
 
 CLOSE_RADIUS = 48
 NEAR_PENALTY = 0.1
+GOAL_RADIUS = 20
 OVERLAP_PENALTY_LOW = 0.5
 OVERLAP_PENALTY_MID = 1.0
 OVERLAP_PENALTY_HIGH = 1.5
+
+MODE = ControlMode.POTENTIAL_FIELD
 
 
 def compute_penalty(robot: Robot, pedestrians: list[Pedestrian]) -> float:
@@ -63,6 +67,11 @@ def run() -> None:
     robot = Robot()
     total_penalty = 0.0
 
+    episode = 0
+    steps = 0
+    total_penalties = []
+    total_steps = []
+
     running = True
     while running:
         for event in pygame.event.get():
@@ -70,15 +79,9 @@ def run() -> None:
                 running = False
 
         keys = pygame.key.get_pressed()
-        move = pygame.Vector2(0, 0)
-        if keys[pygame.K_w] or keys[pygame.K_UP]:
-            move.y -= 1
-        if keys[pygame.K_s] or keys[pygame.K_DOWN]:
-            move.y += 1
-        if keys[pygame.K_a] or keys[pygame.K_LEFT]:
-            move.x -= 1
-        if keys[pygame.K_d] or keys[pygame.K_RIGHT]:
-            move.x += 1
+        move = BEHAVIORS[MODE](robot, goal_pos, pedestrians, keys)
+        steps += 1
+
         if move.length_squared() > 0:
             move = move.normalize() * robot.speed
             robot.move(move)
@@ -87,6 +90,26 @@ def run() -> None:
             ped.update()
 
         total_penalty += compute_penalty(robot, pedestrians)
+        distance_to_goal = pygame.Vector2(robot.x - goal_pos.x, robot.y - goal_pos.y).length()
+        
+        if distance_to_goal < GOAL_RADIUS:
+            episode += 1
+            total_penalties.append(total_penalty)
+            total_steps.append(steps)
+            
+            avg_penalty = sum(total_penalties) / len(total_penalties)
+            avg_steps = sum(total_steps) / len(total_steps)
+            
+            print(f"Episode {episode}: penalty={total_penalty:.1f}, steps={steps}")
+            print(f"  Averages: penalty={avg_penalty:.1f}, steps={avg_steps:.1f}")
+            
+            # Reset for next episode
+            robot.x, robot.y = 80, HEIGHT // 2
+            pedestrians = generate_pedestrians()
+            total_penalty = 0.0
+            steps = 0
+
+        screen.fill(BACKGROUND_COLOR)
 
         screen.fill(BACKGROUND_COLOR)
         pygame.draw.circle(screen, (245, 130, 40), goal_pos, 16)

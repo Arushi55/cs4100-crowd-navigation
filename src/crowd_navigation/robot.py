@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import pygame
 
-from .constants import HEIGHT, WIDTH
+from constants import HEIGHT, WIDTH
 
 ROBOT_COLOR = (45, 90, 255)
 

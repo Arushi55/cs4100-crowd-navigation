@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import pygame
 
-from .constants import HEIGHT, WIDTH
+from constants import HEIGHT, WIDTH
 
 PEDESTRIAN_COLOR = (10, 155, 110)
 
