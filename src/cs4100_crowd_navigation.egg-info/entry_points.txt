@@ -1,2 +1,0 @@
-[console_scripts]
-crowd-sim = crowd_navigation.main:run
