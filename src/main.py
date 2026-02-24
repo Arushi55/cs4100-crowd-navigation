@@ -20,6 +20,7 @@ OVERLAP_PENALTY_LOW = 0.5
 OVERLAP_PENALTY_MID = 1.0
 OVERLAP_PENALTY_HIGH = 1.5
 
+#set control mode with enum value
 MODE = ControlMode.POTENTIAL_FIELD
 
 
