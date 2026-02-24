@@ -43,17 +43,33 @@ def compute_penalty(robot: Robot, pedestrians: list[Pedestrian]) -> float:
 
     return frame_penalty
 
-def generate_pedestrians(count: int = 12) -> list[Pedestrian]:
-    return [
-        Pedestrian(
-            x=random.randint(40, WIDTH - 40),
-            y=random.randint(40, HEIGHT - 40),
-            vx=random.choice([-1, 1]) * random.uniform(0.8, 2.2),
-            vy=random.choice([-1, 1]) * random.uniform(0.8, 2.2),
-        )
-        for _ in range(count)
-    ]
+def random_goal() -> tuple[float, float]:
+    margin = 20
+    return (
+        random.uniform(margin, WIDTH - margin),
+        0,
+    )
 
+def generate_pedestrians(count: int = 12) -> list[Pedestrian]:
+    peds = []
+    for _ in range(count):
+        gx, gy = random_goal()
+        peds.append(
+            Pedestrian(
+                x = random.uniform(40, WIDTH - 40),
+                y = random.uniform(40, HEIGHT - 40),
+                vx = 0.0,
+                vy = 0.0,
+                goal_x = gx,
+                goal_y = -5.0,
+            )
+        )
+    return peds
+
+def reassign_reached_goals(pedestrians: list[Pedestrian]) -> None:
+    for ped in pedestrians:
+        if ped.has_reached_goal():
+            ped.respawn()
 
 def run() -> None:
     pygame.init()
@@ -62,7 +78,7 @@ def run() -> None:
     clock = pygame.time.Clock()
     font = pygame.font.Font(None, 32)
 
-    goal_pos = pygame.Vector2(WIDTH - 80, HEIGHT // 2)
+    goal_pos = pygame.Vector2(WIDTH - 80, HEIGHT - 80)
     pedestrians = generate_pedestrians()
     robot = Robot()
     total_penalty = 0.0
@@ -87,7 +103,8 @@ def run() -> None:
             robot.move(move)
 
         for ped in pedestrians:
-            ped.update()
+            ped.update(pedestrians)
+        reassign_reached_goals(pedestrians)
 
         total_penalty += compute_penalty(robot, pedestrians)
         distance_to_goal = pygame.Vector2(robot.x - goal_pos.x, robot.y - goal_pos.y).length()
@@ -125,7 +142,5 @@ def run() -> None:
 
     pygame.quit()
 
-
 if __name__ == "__main__":
     run()
-
