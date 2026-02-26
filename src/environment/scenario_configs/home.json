@@ -1,0 +1,27 @@
+{
+  "id": "home",
+  "name": "Home",
+  "robot_start": [80, 320],
+  "robot_goal": [870, 320],
+  "obstacles": [
+    [240, 120, 420, 28],
+    [240, 492, 420, 28],
+    [450, 220, 60, 220]
+  ],
+  "pedestrian_spawn_regions": [
+    [40, 40, 120, 160],
+    [40, 430, 140, 170]
+  ],
+  "pedestrian_goal_regions": [
+    [780, 40, 140, 160],
+    [780, 430, 140, 170]
+  ],
+  "randomization": {
+    "obstacle_jitter_px": 14,
+    "obstacle_size_jitter_px": 10,
+    "extra_obstacle_min": 0,
+    "extra_obstacle_max": 2,
+    "random_obstacle_min_size": 30,
+    "random_obstacle_max_size": 80
+  }
+}

@@ -1,0 +1,28 @@
+{
+  "id": "airport",
+  "name": "Airport",
+  "robot_start": [80, 550],
+  "robot_goal": [870, 85],
+  "obstacles": [
+    [200, 130, 560, 36],
+    [260, 260, 80, 260],
+    [440, 260, 80, 260],
+    [620, 260, 80, 260]
+  ],
+  "pedestrian_spawn_regions": [
+    [40, 220, 140, 200],
+    [780, 220, 140, 200]
+  ],
+  "pedestrian_goal_regions": [
+    [780, 40, 140, 140],
+    [40, 40, 140, 140]
+  ],
+  "randomization": {
+    "obstacle_jitter_px": 16,
+    "obstacle_size_jitter_px": 12,
+    "extra_obstacle_min": 1,
+    "extra_obstacle_max": 3,
+    "random_obstacle_min_size": 35,
+    "random_obstacle_max_size": 95
+  }
+}

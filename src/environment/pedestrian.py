@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import math
-import random
 import pygame
+import numpy as np
 
 from constants import HEIGHT, WIDTH
 
@@ -72,14 +72,19 @@ class Pedestrian:
             fy += magnitude * ny
         return fx, fy
     
-    def respawn(self) -> None:
-        self.x = random.uniform(self.radius, WIDTH - self.radius)
+    def respawn(self, rng: np.random.Generator) -> None:
+        self.x = float(rng.uniform(self.radius, WIDTH - self.radius))
         self.y = HEIGHT + self.radius
         self.vx = 0.0
         self.vy = 0.0
-        self.goal_x = random.uniform(self.radius, WIDTH - self.radius)
+        self.goal_x = float(rng.uniform(self.radius, WIDTH - self.radius))
 
-    def update(self, others: list["Pedestrian"]) -> None:
+    def update(
+        self,
+        others: list["Pedestrian"],
+        obstacles: list[pygame.Rect] | None = None,
+        rng: np.random.Generator | None = None,
+    ) -> None:
         f1x, f1y = self._self_driving_force()
         f2x, f2y = self._pedestrian_repulsion(others)
         f3x, f3y = self._wall_repulsion()
@@ -92,11 +97,43 @@ class Pedestrian:
             self.vx = self.vx / speed * self.max_speed
             self.vy = self.vy / speed * self.max_speed
 
-        self.x += self.vx
-        self.y += self.vy
+        old_x, old_y = self.x, self.y
+        proposed_x = self.x + self.vx
+        proposed_y = self.y + self.vy
+
+        if obstacles and self._would_collide(proposed_x, proposed_y, obstacles):
+            # Try axis-separated movement first to simulate sliding around obstacles.
+            if not self._would_collide(proposed_x, old_y, obstacles):
+                self.x = proposed_x
+            elif not self._would_collide(old_x, proposed_y, obstacles):
+                self.y = proposed_y
+            else:
+                # If blocked in both directions, back off and slightly perturb heading.
+                self.vx *= -0.4
+                self.vy *= -0.4
+                if rng is not None:
+                    self.vx += float(rng.uniform(-0.2, 0.2))
+                    self.vy += float(rng.uniform(-0.2, 0.2))
+                self.x = old_x + self.vx
+                self.y = old_y + self.vy
+        else:
+            self.x = proposed_x
+            self.y = proposed_y
+
+        self.x = max(self.radius, min(WIDTH - self.radius, self.x))
+        self.y = max(self.radius, min(HEIGHT - self.radius, self.y))
 
     def has_reached_goal(self, threshold: float = 15.0) -> bool:
         return math.hypot(self.goal_x - self.x, self.goal_y - self.y) < threshold
+
+    def _would_collide(self, x: float, y: float, obstacles: list[pygame.Rect]) -> bool:
+        hitbox = pygame.Rect(
+            int(x - self.radius),
+            int(y - self.radius),
+            self.radius * 2,
+            self.radius * 2,
+        )
+        return any(hitbox.colliderect(obstacle) for obstacle in obstacles)
 
     def draw(self, surface: pygame.Surface) -> None:
         pygame.draw.circle(surface, GOAL_COLOR, (int(self.goal_x), int(self.goal_y)), 4)
