@@ -19,6 +19,7 @@ from environment.scenarios import (
     random_pedestrian_route,
 )
 from agent.behaviors import BEHAVIORS, ControlMode
+from environment.sensor import RaySensor, draw_rays
 
 FPS = 60
 BACKGROUND_COLOR = (245, 247, 240)
@@ -35,6 +36,9 @@ OVERLAP_PENALTY_HIGH = 1.5
 
 # set control mode with enum value
 MODE = ControlMode.POTENTIAL_FIELD
+
+SHOW_RAY_TRACING = True
+
 DEFAULT_SCENARIO_ID = "airport"
 DEFAULT_SEED = 42
 
@@ -188,8 +192,17 @@ def run() -> None:
         pedestrian_count=args.pedestrians,
         random_world=args.random_world,
     )
-    total_penalty = 0.0
 
+    ray_sensor = RaySensor(
+        num_rays=36,
+        max_range=150.0,
+        fov_degrees=360.0,
+        screen_width=WIDTH,
+        screen_height=HEIGHT,
+    )
+    show_rays = SHOW_RAY_TRACING  
+
+    total_penalty = 0.0
     episode = 0
     steps = 0
     total_penalties = []
@@ -264,6 +277,13 @@ def run() -> None:
         robot.draw(screen)
         for ped in pedestrians:
             ped.draw(screen)
+
+        if show_rays:
+            endpoints = ray_sensor.get_ray_endpoints(
+                robot.x, robot.y,
+                pedestrians, scenario.obstacles
+            )
+            draw_rays(screen, endpoints)
 
         penalty_label = font.render(f"Penalty: {total_penalty:.1f}", True, HUD_TEXT_COLOR)
         screen.blit(penalty_label, (20, 20))
