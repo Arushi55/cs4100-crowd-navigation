@@ -17,7 +17,7 @@ from environment.scenarios import (
     random_pedestrian_route,
 )
 
-from environment.sensor import RaySensor, draw_rays
+from agent.sensor import RaySensor, draw_rays
 
 ACTION_VECTORS = [
     (0, -1),   # 0: up

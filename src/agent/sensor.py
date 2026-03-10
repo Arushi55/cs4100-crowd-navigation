@@ -75,6 +75,32 @@ class RaySensor:
         """returns flattened observation vector."""
         return self.cast_rays(robot_x, robot_y, pedestrians, obstacles).flatten()
     
+    def get_visible_pedestrians(
+        self,
+        robot_x: float,
+        robot_y: float,
+        pedestrians: list,
+        obstacles: list[pygame.Rect],
+    ) -> list:
+        """return pedestrians that are hit by at least one ray."""
+        visible_ids = set()
+        visible = []
+        
+        for angle in self.angles:
+            dist, hit_type = self._cast_single_ray(
+                robot_x, robot_y, angle, pedestrians, obstacles
+            )
+            if hit_type == HIT_PEDESTRIAN:
+                end_x = robot_x + math.cos(angle) * dist
+                end_y = robot_y + math.sin(angle) * dist
+                for ped in pedestrians:
+                    if math.hypot(end_x - ped.x, end_y - ped.y) <= ped.radius + 2:
+                        visible_ids.add(id(ped))
+                        visible.append(ped)
+                        break
+        
+        return list(visible)
+
     def _cast_single_ray(
         self,
         ox: float,

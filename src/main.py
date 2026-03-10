@@ -19,7 +19,7 @@ from environment.scenarios import (
     random_pedestrian_route,
 )
 from agent.behaviors import BEHAVIORS, ControlMode
-from environment.sensor import RaySensor, draw_rays
+from agent.sensor import RaySensor, draw_rays
 
 FPS = 60
 BACKGROUND_COLOR = (245, 247, 240)
@@ -199,8 +199,7 @@ def run() -> None:
         fov_degrees=360.0,
         screen_width=WIDTH,
         screen_height=HEIGHT,
-    )
-    show_rays = SHOW_RAY_TRACING  
+    ) 
 
     total_penalty = 0.0
     episode = 0
@@ -235,8 +234,15 @@ def run() -> None:
                 total_penalty = 0.0
                 steps = 0
 
+        if SHOW_RAY_TRACING:
+            visible_pedestrians = ray_sensor.get_visible_pedestrians(
+                robot.x, robot.y, pedestrians, scenario.obstacles
+            )
+        else:
+            visible_pedestrians = pedestrians
+
         keys = pygame.key.get_pressed()
-        move = BEHAVIORS[MODE](robot, goal_pos, pedestrians, keys)
+        move = BEHAVIORS[MODE](robot, goal_pos, visible_pedestrians, keys)
         steps += 1
 
         if move.length_squared() > 0:
@@ -278,7 +284,7 @@ def run() -> None:
         for ped in pedestrians:
             ped.draw(screen)
 
-        if show_rays:
+        if SHOW_RAY_TRACING:
             endpoints = ray_sensor.get_ray_endpoints(
                 robot.x, robot.y,
                 pedestrians, scenario.obstacles
