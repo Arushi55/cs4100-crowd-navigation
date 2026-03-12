@@ -7,6 +7,14 @@ import pygame
 import numpy as np
 
 from constants import HEIGHT, WIDTH
+from environment.behaviors import (
+    PedestrianBehavior,
+    SocialForceBehavior,
+    StationaryBehavior,
+    RandomWalkerBehavior,
+    ClumpBehavior,
+    ZigzagBehavior,
+)
 
 
 SCENARIO_CONFIG_DIR = Path(__file__).with_name("scenario_configs")
@@ -36,10 +44,39 @@ class ScenarioTemplate:
     obstacle_size_jitter_px: int
     extra_obstacle_range: tuple[int, int]
     random_obstacle_size_range: tuple[int, int]
+    pedestrian_behaviors: list[dict[str, int | str]]  # e.g., [{"type": "stationary", "count": 11}]
 
 
 def _tuple4(raw: list[int]) -> tuple[int, int, int, int]:
     return int(raw[0]), int(raw[1]), int(raw[2]), int(raw[3])
+
+
+def _build_behavior(behavior_spec: dict[str, int | str]) -> tuple[PedestrianBehavior, list[int] | None]:
+    """
+    Factory function to create behaviors from scenario config specs.
+    
+    Returns:
+        Tuple of (behavior, goal_region_indices)
+    """
+    behavior_type = str(behavior_spec.get("type", "social_force"))
+    goal_region_indices = behavior_spec.get("goal_region_indices")
+    if goal_region_indices is not None:
+        goal_region_indices = [int(x) for x in goal_region_indices]
+    
+    if behavior_type == "stationary":
+        movement_prob = float(behavior_spec.get("movement_probability", 0.01))
+        return StationaryBehavior(movement_probability=movement_prob), goal_region_indices
+    elif behavior_type == "random_walker":
+        speed_mult = float(behavior_spec.get("speed_multiplier", 2.0))
+        return RandomWalkerBehavior(speed_multiplier=speed_mult), goal_region_indices
+    elif behavior_type == "clump":
+        clump_radius = float(behavior_spec.get("clump_radius", 60.0))
+        return ClumpBehavior(clump_radius=clump_radius), goal_region_indices
+    elif behavior_type == "zigzag":
+        direction_frames = int(behavior_spec.get("direction_change_frames", 30))
+        return ZigzagBehavior(direction_change_frames=direction_frames), goal_region_indices
+    else:  # "social_force" or default
+        return SocialForceBehavior(), goal_region_indices
 
 
 def load_scenario_templates(config_dir: Path = SCENARIO_CONFIG_DIR) -> dict[str, ScenarioTemplate]:
@@ -66,6 +103,7 @@ def load_scenario_templates(config_dir: Path = SCENARIO_CONFIG_DIR) -> dict[str,
                 int(rand.get("random_obstacle_min_size", 35)),
                 int(rand.get("random_obstacle_max_size", 110)),
             ),
+            pedestrian_behaviors=raw.get("pedestrian_behaviors", [{"type": "social_force", "count": 12}]),
         )
     if not templates:
         raise ValueError(f"No scenario config files found in {config_dir}")
@@ -182,9 +220,28 @@ def random_point_in_region(
 def random_pedestrian_route(
     scenario: Scenario,
     rng: np.random.Generator,
+    goal_region_indices: list[int] | None = None,
 ) -> tuple[tuple[float, float], tuple[float, float]]:
+    """
+    Pick a random spawn and goal for a pedestrian.
+    
+    Args:
+        scenario: The scenario with spawn/goal regions
+        rng: Random number generator
+        goal_region_indices: If provided, only pick goals from these region indices.
+                            If None, all goal regions are available.
+    """
     spawn_region = scenario.pedestrian_spawn_regions[int(rng.integers(0, len(scenario.pedestrian_spawn_regions)))]
-    goal_region = scenario.pedestrian_goal_regions[int(rng.integers(0, len(scenario.pedestrian_goal_regions)))]
+    
+    if goal_region_indices is not None and len(goal_region_indices) > 0:
+        # Pick from specified goal regions only
+        chosen_idx = int(rng.integers(0, len(goal_region_indices)))
+        region_idx = goal_region_indices[chosen_idx]
+        goal_region = scenario.pedestrian_goal_regions[region_idx]
+    else:
+        # Pick from all available goal regions
+        goal_region = scenario.pedestrian_goal_regions[int(rng.integers(0, len(scenario.pedestrian_goal_regions)))]
+    
     spawn = random_point_in_region(spawn_region, rng)
     goal = random_point_in_region(goal_region, rng)
     return spawn, goal

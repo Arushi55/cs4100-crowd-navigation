@@ -17,6 +17,7 @@ from environment.scenarios import (
     build_scenario,
     load_scenario_templates,
     random_pedestrian_route,
+    _build_behavior,
 )
 from agent.behaviors import BEHAVIORS, ControlMode
 from agent.sensor import RaySensor, draw_rays
@@ -39,7 +40,7 @@ MODE = ControlMode.POTENTIAL_FIELD
 
 SHOW_RAY_TRACING = True
 
-DEFAULT_SCENARIO_ID = "airport"
+DEFAULT_SCENARIO_ID = "shopping_center"
 DEFAULT_SEED = 42
 
 
@@ -116,22 +117,45 @@ def init_rng(seed: int | None, random_seed: bool) -> tuple[np.random.Generator, 
 
 def generate_pedestrians(
     scenario: Scenario,
+    template: ScenarioTemplate,
     rng: np.random.Generator,
     count: int = 12,
 ) -> list[Pedestrian]:
     peds = []
-    for _ in range(count):
-        (sx, sy), (gx, gy) = random_pedestrian_route(scenario, rng)
-        peds.append(
-            Pedestrian(
-                x = sx,
-                y = sy,
-                vx = 0.0,
-                vy = 0.0,
-                goal_x = gx,
-                goal_y = gy,
+    
+    # If template has behavior specs, use them
+    if template.pedestrian_behaviors:
+        for behavior_spec in template.pedestrian_behaviors:
+            behavior_count = int(behavior_spec.get("count", 0))
+            for _ in range(behavior_count):
+                behavior, goal_region_indices = _build_behavior(behavior_spec)  # Create fresh instance per pedestrian
+                (sx, sy), (gx, gy) = random_pedestrian_route(scenario, rng, goal_region_indices)
+                peds.append(
+                    Pedestrian(
+                        x=sx,
+                        y=sy,
+                        vx=0.0,
+                        vy=0.0,
+                        goal_x=gx,
+                        goal_y=gy,
+                        behavior=behavior,
+                        goal_region_indices=goal_region_indices,
+                    )
+                )
+    else:
+        # Fallback: generate pedestrians without specific behaviors
+        for _ in range(count):
+            (sx, sy), (gx, gy) = random_pedestrian_route(scenario, rng)
+            peds.append(
+                Pedestrian(
+                    x=sx,
+                    y=sy,
+                    vx=0.0,
+                    vy=0.0,
+                    goal_x=gx,
+                    goal_y=gy,
+                )
             )
-        )
     return peds
 
 
@@ -140,15 +164,27 @@ def reassign_reached_goals(
     scenario: Scenario,
     rng: np.random.Generator,
 ) -> None:
+    from environment.behaviors import RandomWalkerBehavior
+    
     for ped in pedestrians:
         if ped.has_reached_goal():
-            (sx, sy), (gx, gy) = random_pedestrian_route(scenario, rng)
-            ped.x = sx
-            ped.y = sy
-            ped.vx = 0.0
-            ped.vy = 0.0
-            ped.goal_x = gx
-            ped.goal_y = gy
+            if isinstance(ped.behavior, RandomWalkerBehavior):
+                # Random walkers don't respawn; just get a new goal
+                (_, _), (gx, gy) = random_pedestrian_route(scenario, rng, ped.goal_region_indices)
+                ped.goal_x = gx
+                ped.goal_y = gy
+            else:
+                # Other pedestrians respawn at a new spawn location
+                (sx, sy), (gx, gy) = random_pedestrian_route(scenario, rng, ped.goal_region_indices)
+                ped.x = sx
+                ped.y = sy
+                ped.vx = 0.0
+                ped.vy = 0.0
+                ped.goal_x = gx
+                ped.goal_y = gy
+            # Preserve behavior; reset any behavior-specific counters if needed
+            if hasattr(ped.behavior, 'frame_count'):
+                ped.behavior.frame_count = 0
 
 
 def draw_scenario(screen: pygame.Surface, scenario: Scenario) -> None:
@@ -164,7 +200,7 @@ def build_episode_state(
 ) -> tuple[Scenario, Robot, list[Pedestrian], pygame.Vector2]:
     scenario = build_scenario(template, rng, randomize_world=random_world)
     robot = Robot(x=scenario.robot_start[0], y=scenario.robot_start[1])
-    pedestrians = generate_pedestrians(scenario, rng, count=pedestrian_count)
+    pedestrians = generate_pedestrians(scenario, template, rng, count=pedestrian_count)
     goal_pos = pygame.Vector2(*scenario.robot_goal)
     return scenario, robot, pedestrians, goal_pos
 

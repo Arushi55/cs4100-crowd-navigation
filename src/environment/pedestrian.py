@@ -1,9 +1,13 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
 import pygame
 import numpy as np
+from typing import TYPE_CHECKING
 
 from constants import HEIGHT, WIDTH
+
+if TYPE_CHECKING:
+    from environment.behaviors import PedestrianBehavior
 
 PEDESTRIAN_COLOR = (10, 155, 110)
 GOAL_COLOR = (255, 200, 0)
@@ -17,6 +21,8 @@ class Pedestrian:
     goal_x: float
     goal_y: float
     radius: int = 10
+    behavior: "PedestrianBehavior | None" = field(default=None)
+    goal_region_indices: list[int] | None = field(default=None)
 
     desired_speed: float = 1.5
     relaxation_time: float = 30.0
@@ -85,43 +91,13 @@ class Pedestrian:
         obstacles: list[pygame.Rect] | None = None,
         rng: np.random.Generator | None = None,
     ) -> None:
-        f1x, f1y = self._self_driving_force()
-        f2x, f2y = self._pedestrian_repulsion(others)
-        f3x, f3y = self._wall_repulsion()
-
-        self.vx += f1x + f2x + f3x
-        self.vy += f1y + f2y + f3y
-
-        speed = math.hypot(self.vx, self.vy)
-        if speed > self.max_speed:
-            self.vx = self.vx / speed * self.max_speed
-            self.vy = self.vy / speed * self.max_speed
-
-        old_x, old_y = self.x, self.y
-        proposed_x = self.x + self.vx
-        proposed_y = self.y + self.vy
-
-        if obstacles and self._would_collide(proposed_x, proposed_y, obstacles):
-            # Try axis-separated movement first to simulate sliding around obstacles.
-            if not self._would_collide(proposed_x, old_y, obstacles):
-                self.x = proposed_x
-            elif not self._would_collide(old_x, proposed_y, obstacles):
-                self.y = proposed_y
-            else:
-                # If blocked in both directions, back off and slightly perturb heading.
-                self.vx *= -0.4
-                self.vy *= -0.4
-                if rng is not None:
-                    self.vx += float(rng.uniform(-0.2, 0.2))
-                    self.vy += float(rng.uniform(-0.2, 0.2))
-                self.x = old_x + self.vx
-                self.y = old_y + self.vy
+        if self.behavior is not None:
+            self.behavior.update(self, others, obstacles, rng)
         else:
-            self.x = proposed_x
-            self.y = proposed_y
-
-        self.x = max(self.radius, min(WIDTH - self.radius, self.x))
-        self.y = max(self.radius, min(HEIGHT - self.radius, self.y))
+            # Fallback to social force if no behavior assigned
+            from environment.behaviors import SocialForceBehavior
+            default_behavior = SocialForceBehavior()
+            default_behavior.update(self, others, obstacles, rng)
 
     def has_reached_goal(self, threshold: float = 15.0) -> bool:
         return math.hypot(self.goal_x - self.x, self.goal_y - self.y) < threshold

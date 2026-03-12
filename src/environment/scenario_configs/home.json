@@ -4,17 +4,24 @@
   "robot_start": [80, 320],
   "robot_goal": [870, 320],
   "obstacles": [
-    [240, 120, 420, 28],
-    [240, 492, 420, 28],
-    [450, 220, 60, 220]
+    [200, 100, 420, 28],
+    [200, 502, 420, 28],
+    [200, 220, 60, 220],
+    [560, 220, 40, 40],
+    [400, 220, 20, 20],
+    [412, 307, 20, 20],
+    [400, 380, 20, 30],
+    [567, 323, 10, 40],
+    [148, 893, 40, 40]
   ],
-  "pedestrian_spawn_regions": [
-    [40, 40, 120, 160],
-    [40, 430, 140, 170]
-  ],
+  "pedestrian_spawn_regions": [[40, 40, 120, 160]],
   "pedestrian_goal_regions": [
-    [780, 40, 140, 160],
-    [780, 430, 140, 170]
+    [40, 40, 120, 160],
+    [0, 0, 920, 640]
+  ],
+  "pedestrian_behaviors": [
+    { "type": "stationary", "count": 11 },
+    { "type": "random_walker", "count": 1, "goal_region_indices": [1] }
   ],
   "randomization": {
     "obstacle_jitter_px": 14,
