@@ -25,3 +25,30 @@ class Robot:
         self.y += delta.y
         self.x = max(self.radius, min(WIDTH - self.radius, self.x))
         self.y = max(self.radius, min(HEIGHT - self.radius, self.y))
+
+    def move_with_obstacles(
+        self,
+        delta: pygame.Vector2,
+        obstacles: list[pygame.Rect],
+    ) -> None:
+        old_x, old_y = self.x, self.y
+
+        # Resolve x movement first, then y movement to allow sliding behavior.
+        self.x += delta.x
+        self.x = max(self.radius, min(WIDTH - self.radius, self.x))
+        if self._collides_any(obstacles):
+            self.x = old_x
+
+        self.y += delta.y
+        self.y = max(self.radius, min(HEIGHT - self.radius, self.y))
+        if self._collides_any(obstacles):
+            self.y = old_y
+
+    def _collides_any(self, obstacles: list[pygame.Rect]) -> bool:
+        hitbox = pygame.Rect(
+            int(self.x - self.radius),
+            int(self.y - self.radius),
+            self.radius * 2,
+            self.radius * 2,
+        )
+        return any(hitbox.colliderect(obstacle) for obstacle in obstacles)

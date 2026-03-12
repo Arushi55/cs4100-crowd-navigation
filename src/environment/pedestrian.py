@@ -1,9 +1,13 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 import math
-import random
 import pygame
+import numpy as np
+from typing import TYPE_CHECKING
 
 from constants import HEIGHT, WIDTH
+
+if TYPE_CHECKING:
+    from environment.behaviors import PedestrianBehavior
 
 PEDESTRIAN_COLOR = (10, 155, 110)
 GOAL_COLOR = (255, 200, 0)
@@ -17,6 +21,8 @@ class Pedestrian:
     goal_x: float
     goal_y: float
     radius: int = 10
+    behavior: "PedestrianBehavior | None" = field(default=None)
+    goal_region_indices: list[int] | None = field(default=None)
 
     desired_speed: float = 1.5
     relaxation_time: float = 30.0
@@ -72,31 +78,38 @@ class Pedestrian:
             fy += magnitude * ny
         return fx, fy
     
-    def respawn(self) -> None:
-        self.x = random.uniform(self.radius, WIDTH - self.radius)
+    def respawn(self, rng: np.random.Generator) -> None:
+        self.x = float(rng.uniform(self.radius, WIDTH - self.radius))
         self.y = HEIGHT + self.radius
         self.vx = 0.0
         self.vy = 0.0
-        self.goal_x = random.uniform(self.radius, WIDTH - self.radius)
+        self.goal_x = float(rng.uniform(self.radius, WIDTH - self.radius))
 
-    def update(self, others: list["Pedestrian"]) -> None:
-        f1x, f1y = self._self_driving_force()
-        f2x, f2y = self._pedestrian_repulsion(others)
-        f3x, f3y = self._wall_repulsion()
-
-        self.vx += f1x + f2x + f3x
-        self.vy += f1y + f2y + f3y
-
-        speed = math.hypot(self.vx, self.vy)
-        if speed > self.max_speed:
-            self.vx = self.vx / speed * self.max_speed
-            self.vy = self.vy / speed * self.max_speed
-
-        self.x += self.vx
-        self.y += self.vy
+    def update(
+        self,
+        others: list["Pedestrian"],
+        obstacles: list[pygame.Rect] | None = None,
+        rng: np.random.Generator | None = None,
+    ) -> None:
+        if self.behavior is not None:
+            self.behavior.update(self, others, obstacles, rng)
+        else:
+            # Fallback to social force if no behavior assigned
+            from environment.behaviors import SocialForceBehavior
+            default_behavior = SocialForceBehavior()
+            default_behavior.update(self, others, obstacles, rng)
 
     def has_reached_goal(self, threshold: float = 15.0) -> bool:
         return math.hypot(self.goal_x - self.x, self.goal_y - self.y) < threshold
+
+    def _would_collide(self, x: float, y: float, obstacles: list[pygame.Rect]) -> bool:
+        hitbox = pygame.Rect(
+            int(x - self.radius),
+            int(y - self.radius),
+            self.radius * 2,
+            self.radius * 2,
+        )
+        return any(hitbox.colliderect(obstacle) for obstacle in obstacles)
 
     def draw(self, surface: pygame.Surface) -> None:
         pygame.draw.circle(surface, GOAL_COLOR, (int(self.goal_x), int(self.goal_y)), 4)
