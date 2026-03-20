@@ -10,12 +10,15 @@ import numpy as np
 from constants import HEIGHT, WIDTH
 from environment.pedestrian import Pedestrian
 from environment.robot import Robot
+from environment.pathfinding import NavGrid
 from environment.scenarios import (
     SCENARIO_CONFIG_DIR,
     Scenario,
     ScenarioTemplate,
     build_scenario,
+    generate_pedestrian_population,
     load_scenario_templates,
+    respawn_family_group_members,
     random_pedestrian_route,
     _build_behavior,
 )
@@ -118,71 +121,45 @@ def init_rng(seed: int | None, random_seed: bool) -> tuple[np.random.Generator, 
 def generate_pedestrians(
     scenario: Scenario,
     template: ScenarioTemplate,
+    nav_grid: NavGrid,
     rng: np.random.Generator,
     count: int = 12,
 ) -> list[Pedestrian]:
-    peds = []
-    
-    # If template has behavior specs, use them
-    if template.pedestrian_behaviors:
-        for behavior_spec in template.pedestrian_behaviors:
-            behavior_count = int(behavior_spec.get("count", 0))
-            for _ in range(behavior_count):
-                behavior, goal_region_indices = _build_behavior(behavior_spec)  # Create fresh instance per pedestrian
-                (sx, sy), (gx, gy) = random_pedestrian_route(scenario, rng, goal_region_indices)
-                peds.append(
-                    Pedestrian(
-                        x=sx,
-                        y=sy,
-                        vx=0.0,
-                        vy=0.0,
-                        goal_x=gx,
-                        goal_y=gy,
-                        behavior=behavior,
-                        goal_region_indices=goal_region_indices,
-                    )
-                )
-    else:
-        # Fallback: generate pedestrians without specific behaviors
-        for _ in range(count):
-            (sx, sy), (gx, gy) = random_pedestrian_route(scenario, rng)
-            peds.append(
-                Pedestrian(
-                    x=sx,
-                    y=sy,
-                    vx=0.0,
-                    vy=0.0,
-                    goal_x=gx,
-                    goal_y=gy,
-                )
-            )
-    return peds
+    return generate_pedestrian_population(
+        scenario,
+        template,
+        nav_grid,
+        rng,
+        count=count,
+    )
 
 
 def reassign_reached_goals(
     pedestrians: list[Pedestrian],
     scenario: Scenario,
+    nav_grid: NavGrid,
     rng: np.random.Generator,
 ) -> None:
     from environment.behaviors import RandomWalkerBehavior
-    
+
+    respawned_groups: set[int] = set()
     for ped in pedestrians:
         if ped.has_reached_goal():
+            if ped.group_id is not None and ped.group_id not in respawned_groups:
+                group_members = [member for member in pedestrians if member.group_id == ped.group_id]
+                respawn_family_group_members(group_members, nav_grid, rng)
+                respawned_groups.add(ped.group_id)
+                continue
             if isinstance(ped.behavior, RandomWalkerBehavior):
-                # Random walkers don't respawn; just get a new goal
                 (_, _), (gx, gy) = random_pedestrian_route(scenario, rng, ped.goal_region_indices)
-                ped.goal_x = gx
-                ped.goal_y = gy
+                ped.set_goal(gx, gy, nav_grid=nav_grid, rng=rng)
             else:
-                # Other pedestrians respawn at a new spawn location
                 (sx, sy), (gx, gy) = random_pedestrian_route(scenario, rng, ped.goal_region_indices)
                 ped.x = sx
                 ped.y = sy
                 ped.vx = 0.0
                 ped.vy = 0.0
-                ped.goal_x = gx
-                ped.goal_y = gy
-            # Preserve behavior; reset any behavior-specific counters if needed
+                ped.set_goal(gx, gy, nav_grid=nav_grid, rng=rng)
             if hasattr(ped.behavior, 'frame_count'):
                 ped.behavior.frame_count = 0
 
@@ -197,12 +174,13 @@ def build_episode_state(
     rng: np.random.Generator,
     pedestrian_count: int,
     random_world: bool,
-) -> tuple[Scenario, Robot, list[Pedestrian], pygame.Vector2]:
+) -> tuple[Scenario, NavGrid, Robot, list[Pedestrian], pygame.Vector2]:
     scenario = build_scenario(template, rng, randomize_world=random_world)
+    nav_grid = NavGrid(WIDTH, HEIGHT, scenario.obstacles)
     robot = Robot(x=scenario.robot_start[0], y=scenario.robot_start[1])
-    pedestrians = generate_pedestrians(scenario, template, rng, count=pedestrian_count)
+    pedestrians = generate_pedestrians(scenario, template, nav_grid, rng, count=pedestrian_count)
     goal_pos = pygame.Vector2(*scenario.robot_goal)
-    return scenario, robot, pedestrians, goal_pos
+    return scenario, nav_grid, robot, pedestrians, goal_pos
 
 
 def run() -> None:
@@ -222,7 +200,7 @@ def run() -> None:
 
     current_scenario_id = args.scenario
     current_template = templates[current_scenario_id]
-    scenario, robot, pedestrians, goal_pos = build_episode_state(
+    scenario, nav_grid, robot, pedestrians, goal_pos = build_episode_state(
         current_template,
         rng=rng,
         pedestrian_count=args.pedestrians,
@@ -261,7 +239,7 @@ def run() -> None:
                 if current_scenario_id not in templates:
                     continue
                 current_template = templates[current_scenario_id]
-                scenario, robot, pedestrians, goal_pos = build_episode_state(
+                scenario, nav_grid, robot, pedestrians, goal_pos = build_episode_state(
                     current_template,
                     rng=rng,
                     pedestrian_count=args.pedestrians,
@@ -287,7 +265,7 @@ def run() -> None:
 
         for ped in pedestrians:
             ped.update(pedestrians, scenario.obstacles, rng=rng)
-        reassign_reached_goals(pedestrians, scenario, rng=rng)
+        reassign_reached_goals(pedestrians, scenario, nav_grid, rng=rng)
 
         total_penalty += compute_penalty(robot, pedestrians)
         distance_to_goal = pygame.Vector2(robot.x - goal_pos.x, robot.y - goal_pos.y).length()
@@ -304,7 +282,7 @@ def run() -> None:
             print(f"  Averages: penalty={avg_penalty:.1f}, steps={avg_steps:.1f}")
 
             # Reset for next episode
-            scenario, robot, pedestrians, goal_pos = build_episode_state(
+            scenario, nav_grid, robot, pedestrians, goal_pos = build_episode_state(
                 current_template,
                 rng=rng,
                 pedestrian_count=args.pedestrians,

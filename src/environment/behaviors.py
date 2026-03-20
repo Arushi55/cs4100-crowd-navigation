@@ -33,14 +33,13 @@ class SocialForceBehavior(PedestrianBehavior):
         obstacles: list[pygame.Rect] | None = None,
         rng: np.random.Generator | None = None,
     ) -> None:
-        from environment.pedestrian import Pedestrian
-
         f1x, f1y = pedestrian._self_driving_force()
         f2x, f2y = pedestrian._pedestrian_repulsion(others)
         f3x, f3y = pedestrian._wall_repulsion()
+        f4x, f4y = pedestrian._obstacle_repulsion(obstacles)
 
-        pedestrian.vx += f1x + f2x + f3x
-        pedestrian.vy += f1y + f2y + f3y
+        pedestrian.vx += f1x + f2x + f3x + f4x
+        pedestrian.vy += f1y + f2y + f3y + f4y
 
         speed = math.hypot(pedestrian.vx, pedestrian.vy)
         if speed > pedestrian.max_speed:
@@ -68,20 +67,22 @@ class StationaryBehavior(PedestrianBehavior):
         pedestrian.vx *= 0.95
         pedestrian.vy *= 0.95
 
-        # Occasionally move toward goal with weak force
+        # Occasionally move toward current waypoint with weak force
         if rng and rng.uniform() < self.movement_probability:
-            dx = pedestrian.goal_x - pedestrian.x
-            dy = pedestrian.goal_y - pedestrian.y
+            tx, ty = pedestrian.get_steering_target()
+            dx = tx - pedestrian.x
+            dy = ty - pedestrian.y
             dist = math.hypot(dx, dy)
             if dist > 1e-6:
                 ex, ey = dx / dist, dy / dist
                 pedestrian.vx = ex * 0.3
                 pedestrian.vy = ey * 0.3
 
-        # Weak repulsion from walls
+        # Weak repulsion from walls and obstacles
         f3x, f3y = pedestrian._wall_repulsion()
-        pedestrian.vx += f3x * 0.3
-        pedestrian.vy += f3y * 0.3
+        f4x, f4y = pedestrian._obstacle_repulsion(obstacles)
+        pedestrian.vx += f3x * 0.3 + f4x * 0.5
+        pedestrian.vy += f3y * 0.3 + f4y * 0.5
 
         _apply_movement(pedestrian, obstacles, rng)
 
@@ -99,9 +100,10 @@ class RandomWalkerBehavior(PedestrianBehavior):
         obstacles: list[pygame.Rect] | None = None,
         rng: np.random.Generator | None = None,
     ) -> None:
-        # Move toward current goal with increased speed
-        dx = pedestrian.goal_x - pedestrian.x
-        dy = pedestrian.goal_y - pedestrian.y
+        # Move toward current waypoint with increased speed
+        tx, ty = pedestrian.get_steering_target()
+        dx = tx - pedestrian.x
+        dy = ty - pedestrian.y
         dist = math.hypot(dx, dy)
         if dist > 1e-6:
             ex, ey = dx / dist, dy / dist
@@ -116,15 +118,124 @@ class RandomWalkerBehavior(PedestrianBehavior):
         pedestrian.vx += fx + f2x * 0.3
         pedestrian.vy += fy + f2y * 0.3
 
-        # Weak wall repulsion for boundary awareness
+        # Wall + obstacle repulsion
         f3x, f3y = pedestrian._wall_repulsion()
-        pedestrian.vx += f3x * 0.3
-        pedestrian.vy += f3y * 0.3
+        f4x, f4y = pedestrian._obstacle_repulsion(obstacles)
+        pedestrian.vx += f3x * 0.3 + f4x
+        pedestrian.vy += f3y * 0.3 + f4y
 
         speed = math.hypot(pedestrian.vx, pedestrian.vy)
         if speed > pedestrian.max_speed:
             pedestrian.vx = pedestrian.vx / speed * pedestrian.max_speed
             pedestrian.vy = pedestrian.vy / speed * pedestrian.max_speed
+
+        _apply_movement(pedestrian, obstacles, rng)
+
+
+class FamilyGroupBehavior(PedestrianBehavior):
+    """Keeps a small group moving together toward a shared edge goal."""
+
+    def __init__(
+        self,
+        cohesion_strength: float = 0.9,
+        alignment_strength: float = 0.18,
+        separation_strength: float = 0.28,
+        wander_strength: float = 0.2,
+        wander_interval: int = 35,
+    ):
+        self.cohesion_strength = cohesion_strength
+        self.alignment_strength = alignment_strength
+        self.separation_strength = separation_strength
+        self.wander_strength = wander_strength
+        self.wander_interval = wander_interval
+        self.frame_count = 0
+        self._wander_angle = 0.0
+
+    def update(
+        self,
+        pedestrian: "Pedestrian",
+        others: list["Pedestrian"],
+        obstacles: list[pygame.Rect] | None = None,
+        rng: np.random.Generator | None = None,
+    ) -> None:
+        self.frame_count += 1
+        if rng is not None and (
+            self.frame_count == 1 or self.frame_count % self.wander_interval == 0
+        ):
+            self._wander_angle = float(rng.uniform(0.0, 2.0 * math.pi))
+
+        group_members = [
+            other
+            for other in others
+            if other is not pedestrian and other.group_id == pedestrian.group_id
+        ]
+
+        f_goal_x, f_goal_y = pedestrian._self_driving_force()
+        f_cohesion_x, f_cohesion_y = 0.0, 0.0
+        f_align_x, f_align_y = 0.0, 0.0
+        f_group_sep_x, f_group_sep_y = 0.0, 0.0
+
+        if group_members:
+            center_x = sum(member.x for member in group_members) / len(group_members)
+            center_y = sum(member.y for member in group_members) / len(group_members)
+            to_center_x = center_x - pedestrian.x
+            to_center_y = center_y - pedestrian.y
+            center_dist = math.hypot(to_center_x, to_center_y)
+            if center_dist > 1e-6:
+                f_cohesion_x = (
+                    to_center_x / center_dist * self.cohesion_strength
+                )
+                f_cohesion_y = (
+                    to_center_y / center_dist * self.cohesion_strength
+                )
+
+            avg_vx = sum(member.vx for member in group_members) / len(group_members)
+            avg_vy = sum(member.vy for member in group_members) / len(group_members)
+            f_align_x = (avg_vx - pedestrian.vx) * self.alignment_strength
+            f_align_y = (avg_vy - pedestrian.vy) * self.alignment_strength
+
+            for member in group_members:
+                dx = pedestrian.x - member.x
+                dy = pedestrian.y - member.y
+                dist = math.hypot(dx, dy)
+                comfortable_dist = pedestrian.radius * 2.8
+                if 1e-6 < dist < comfortable_dist:
+                    scale = (comfortable_dist - dist) / comfortable_dist
+                    f_group_sep_x += dx / dist * scale * self.separation_strength
+                    f_group_sep_y += dy / dist * scale * self.separation_strength
+
+        f_ped_x, f_ped_y = pedestrian._pedestrian_repulsion(others)
+        f_wall_x, f_wall_y = pedestrian._wall_repulsion()
+        f_obstacle_x, f_obstacle_y = pedestrian._obstacle_repulsion(obstacles)
+        f_wander_x = math.cos(self._wander_angle) * self.wander_strength
+        f_wander_y = math.sin(self._wander_angle) * self.wander_strength
+
+        pedestrian.vx += (
+            f_goal_x * 1.15
+            + f_cohesion_x
+            + f_align_x
+            + f_group_sep_x
+            + f_ped_x * 0.22
+            + f_wall_x * 0.55
+            + f_obstacle_x
+            + f_wander_x
+        )
+        pedestrian.vy += (
+            f_goal_y * 1.15
+            + f_cohesion_y
+            + f_align_y
+            + f_group_sep_y
+            + f_ped_y * 0.22
+            + f_wall_y * 0.55
+            + f_obstacle_y
+            + f_wander_y
+        )
+
+        speed = math.hypot(pedestrian.vx, pedestrian.vy)
+        group_max_speed = pedestrian.max_speed * 1.08
+        if speed > group_max_speed:
+            pedestrian.vx = pedestrian.vx / speed * group_max_speed
+            pedestrian.vy = pedestrian.vy / speed * group_max_speed
 
         _apply_movement(pedestrian, obstacles, rng)
 
@@ -142,9 +253,10 @@ class ClumpBehavior(PedestrianBehavior):
         obstacles: list[pygame.Rect] | None = None,
         rng: np.random.Generator | None = None,
     ) -> None:
-        # Self-driving force toward goal (reduced)
-        dx = pedestrian.goal_x - pedestrian.x
-        dy = pedestrian.goal_y - pedestrian.y
+        # Self-driving force toward current waypoint (reduced)
+        tx, ty = pedestrian.get_steering_target()
+        dx = tx - pedestrian.x
+        dy = ty - pedestrian.y
         dist = math.hypot(dx, dy)
         if dist > 1e-6:
             ex, ey = dx / dist, dy / dist
@@ -194,9 +306,10 @@ class ClumpBehavior(PedestrianBehavior):
                 f_sep_y += magnitude * ny
 
         f3x, f3y = pedestrian._wall_repulsion()
+        f4x, f4y = pedestrian._obstacle_repulsion(obstacles)
 
-        pedestrian.vx += fx + f_cohesion_x + f_sep_x + f3x * 0.5
-        pedestrian.vy += fy + f_cohesion_y + f_sep_y + f3y * 0.5
+        pedestrian.vx += fx + f_cohesion_x + f_sep_x + f3x * 0.5 + f4x
+        pedestrian.vy += fy + f_cohesion_y + f_sep_y + f3y * 0.5 + f4y
 
         speed = math.hypot(pedestrian.vx, pedestrian.vy)
         if speed > pedestrian.max_speed:
@@ -222,23 +335,24 @@ class ZigzagBehavior(PedestrianBehavior):
     ) -> None:
         self.frame_count += 1
 
-        # Change direction periodically
+        # Change direction periodically — aim toward current waypoint with zigzag offset
         if self.frame_count % self.direction_change_frames == 0:
-            dx = pedestrian.goal_x - pedestrian.x
-            dy = pedestrian.goal_y - pedestrian.y
+            tx, ty = pedestrian.get_steering_target()
+            dx = tx - pedestrian.x
+            dy = ty - pedestrian.y
             dist = math.hypot(dx, dy)
             if dist > 1e-6:
-                # Rotate direction slightly for zigzag
                 angle = math.atan2(dy, dx)
                 if rng:
                     angle += float(rng.uniform(-0.6, 0.6))
                 pedestrian.vx = math.cos(angle) * pedestrian.desired_speed
                 pedestrian.vy = math.sin(angle) * pedestrian.desired_speed
 
-        # Weak pedestrian avoidance
+        # Pedestrian avoidance + obstacle repulsion
         f2x, f2y = pedestrian._pedestrian_repulsion(others)
-        pedestrian.vx += f2x * 0.3
-        pedestrian.vy += f2y * 0.3
+        f4x, f4y = pedestrian._obstacle_repulsion(obstacles)
+        pedestrian.vx += f2x * 0.3 + f4x
+        pedestrian.vy += f2y * 0.3 + f4y
 
         # Wall repulsion
         f3x, f3y = pedestrian._wall_repulsion()
@@ -253,32 +367,62 @@ class ZigzagBehavior(PedestrianBehavior):
         _apply_movement(pedestrian, obstacles, rng)
 
 
+# Track how long each pedestrian has been stuck (keyed by id)
+_stuck_counters: dict[int, tuple[float, float, int]] = {}
+_STUCK_THRESHOLD_FRAMES = 60    # frames before considered stuck
+_STUCK_MOVE_THRESHOLD = 2.0     # px of movement to consider "not stuck"
+
+
 def _apply_movement(
     pedestrian: "Pedestrian",
     obstacles: list[pygame.Rect] | None = None,
     rng: np.random.Generator | None = None,
 ) -> None:
-    """Apply velocity to position with collision handling."""
+    """Apply velocity to position with collision handling and stuck recovery."""
     old_x, old_y = pedestrian.x, pedestrian.y
     proposed_x = pedestrian.x + pedestrian.vx
     proposed_y = pedestrian.y + pedestrian.vy
 
     if obstacles and pedestrian._would_collide(proposed_x, proposed_y, obstacles):
+        # Try sliding along each axis independently
         if not pedestrian._would_collide(proposed_x, old_y, obstacles):
             pedestrian.x = proposed_x
         elif not pedestrian._would_collide(old_x, proposed_y, obstacles):
             pedestrian.y = proposed_y
         else:
-            pedestrian.vx *= -0.4
-            pedestrian.vy *= -0.4
+            # Fully blocked: reverse with stronger kick
+            pedestrian.vx *= -0.6
+            pedestrian.vy *= -0.6
             if rng is not None:
-                pedestrian.vx += float(rng.uniform(-0.2, 0.2))
-                pedestrian.vy += float(rng.uniform(-0.2, 0.2))
-            pedestrian.x = old_x + pedestrian.vx
-            pedestrian.y = old_y + pedestrian.vy
+                pedestrian.vx += float(rng.uniform(-0.5, 0.5))
+                pedestrian.vy += float(rng.uniform(-0.5, 0.5))
     else:
         pedestrian.x = proposed_x
         pedestrian.y = proposed_y
 
+    # Clamp to screen
     pedestrian.x = max(pedestrian.radius, min(WIDTH - pedestrian.radius, pedestrian.x))
     pedestrian.y = max(pedestrian.radius, min(HEIGHT - pedestrian.radius, pedestrian.y))
+
+    # ---- Stuck detection / recovery ----
+    pid = id(pedestrian)
+    if pid in _stuck_counters:
+        sx, sy, count = _stuck_counters[pid]
+        moved = math.hypot(pedestrian.x - sx, pedestrian.y - sy)
+        if moved < _STUCK_MOVE_THRESHOLD:
+            count += 1
+        else:
+            count = 0
+            sx, sy = pedestrian.x, pedestrian.y
+        _stuck_counters[pid] = (sx, sy, count)
+
+        if count >= _STUCK_THRESHOLD_FRAMES:
+            # Give a strong random kick to break free
+            if rng is not None:
+                angle = float(rng.uniform(0, 2 * math.pi))
+                kick = pedestrian.desired_speed * 1.5
+                pedestrian.vx = math.cos(angle) * kick
+                pedestrian.vy = math.sin(angle) * kick
+            _stuck_counters[pid] = (pedestrian.x, pedestrian.y, 0)
+    else:
+        _stuck_counters[pid] = (pedestrian.x, pedestrian.y, 0)

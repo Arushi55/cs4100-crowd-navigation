@@ -30,19 +30,32 @@ class Robot:
         self,
         delta: pygame.Vector2,
         obstacles: list[pygame.Rect],
-    ) -> None:
+    ) -> int:
         old_x, old_y = self.x, self.y
+        blocked_axes = 0
 
         # Resolve x movement first, then y movement to allow sliding behavior.
-        self.x += delta.x
-        self.x = max(self.radius, min(WIDTH - self.radius, self.x))
+        attempted_x = self.x + delta.x
+        clamped_x = max(self.radius, min(WIDTH - self.radius, attempted_x))
+        blocked_x = abs(clamped_x - attempted_x) > 1e-6
+        self.x = clamped_x
         if self._collides_any(obstacles):
             self.x = old_x
+            blocked_x = True
+        if blocked_x:
+            blocked_axes += 1
 
-        self.y += delta.y
-        self.y = max(self.radius, min(HEIGHT - self.radius, self.y))
+        attempted_y = self.y + delta.y
+        clamped_y = max(self.radius, min(HEIGHT - self.radius, attempted_y))
+        blocked_y = abs(clamped_y - attempted_y) > 1e-6
+        self.y = clamped_y
         if self._collides_any(obstacles):
             self.y = old_y
+            blocked_y = True
+        if blocked_y:
+            blocked_axes += 1
+
+        return blocked_axes
 
     def _collides_any(self, obstacles: list[pygame.Rect]) -> bool:
         hitbox = pygame.Rect(

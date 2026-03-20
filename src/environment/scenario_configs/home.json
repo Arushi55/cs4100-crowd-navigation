@@ -11,17 +11,24 @@
     [400, 220, 20, 20],
     [412, 307, 20, 20],
     [400, 380, 20, 30],
-    [567, 323, 10, 40],
-    [148, 893, 40, 40]
+    [567, 323, 10, 40]
   ],
-  "pedestrian_spawn_regions": [[40, 40, 120, 160]],
+  "pedestrian_spawn_regions": [
+    [20, 20, 600, 280],
+    [20, 340, 600, 280],
+    [630, 20, 300, 600]
+  ],
   "pedestrian_goal_regions": [
-    [40, 40, 120, 160],
-    [0, 0, 920, 640]
+    [20, 20, 160, 280],
+    [630, 20, 300, 600],
+    [20, 340, 200, 280],
+    [300, 150, 300, 350]
   ],
   "pedestrian_behaviors": [
-    { "type": "stationary", "count": 11 },
-    { "type": "random_walker", "count": 1, "goal_region_indices": [1] }
+    { "type": "stationary", "count": 4 },
+    { "type": "social_force", "count": 4 },
+    { "type": "random_walker", "count": 2, "goal_region_indices": [0, 1, 2, 3] },
+    { "type": "zigzag", "count": 2 }
   ],
   "randomization": {
     "obstacle_jitter_px": 14,

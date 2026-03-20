@@ -15,14 +15,22 @@
     [350, 150, 50, 50]
   ],
   "pedestrian_spawn_regions": [
-    [40, 40, 40, 40],
-    [850, 420, 70, 180]
+    [20, 20, 660, 300],
+    [20, 330, 660, 290],
+    [710, 20, 220, 600]
   ],
   "pedestrian_goal_regions": [
-    [850, 40, 70, 180],
-    [20, 420, 60, 180]
+    [850, 40, 100, 200],
+    [20, 420, 80, 200],
+    [110, 110, 580, 260],
+    [710, 300, 200, 300]
   ],
-  "pedestrian_behaviors": [{ "type": "zigzag", "count": 12 }],
+  "pedestrian_behaviors": [
+    { "type": "zigzag", "count": 4 },
+    { "type": "social_force", "count": 4 },
+    { "type": "clump", "count": 2 },
+    { "type": "random_walker", "count": 2, "goal_region_indices": [0, 1, 2, 3] }
+  ],
   "randomization": {
     "obstacle_jitter_px": 18,
     "obstacle_size_jitter_px": 14,

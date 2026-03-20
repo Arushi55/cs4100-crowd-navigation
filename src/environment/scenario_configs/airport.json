@@ -11,14 +11,69 @@
     [850, 300, 1, 200]
   ],
   "pedestrian_spawn_regions": [
-    [20, 220, 70, 200],
-    [860, 220, 60, 200]
+    [20, 20, 400, 600],
+    [500, 20, 420, 600]
   ],
   "pedestrian_goal_regions": [
-    [780, 20, 120, 90],
-    [20, 20, 120, 90]
+    [780, 20, 150, 200],
+    [20, 20, 150, 200],
+    [300, 400, 350, 200],
+    [20, 400, 200, 200]
   ],
-  "pedestrian_behaviors": [{ "type": "clump", "count": 12 }],
+  "pedestrian_groups": [
+    {
+      "type": "family",
+      "weight": 4,
+      "size_min": 2,
+      "size_max": 3,
+      "spawn_edge": "left",
+      "goal_edge": "right",
+      "spawn_spread": 18,
+      "goal_spread": 16,
+      "desired_speed": 1.8,
+      "max_speed": 3.3,
+      "wander_strength": 0.18
+    },
+    {
+      "type": "family",
+      "weight": 4,
+      "size_min": 2,
+      "size_max": 3,
+      "spawn_edge": "right",
+      "goal_edge": "left",
+      "spawn_spread": 18,
+      "goal_spread": 16,
+      "desired_speed": 1.85,
+      "max_speed": 3.35,
+      "wander_strength": 0.22
+    },
+    {
+      "type": "family",
+      "weight": 2,
+      "size_min": 2,
+      "size_max": 3,
+      "spawn_edge": "bottom",
+      "goal_edge": "top",
+      "spawn_spread": 20,
+      "goal_spread": 18,
+      "desired_speed": 1.95,
+      "max_speed": 3.45,
+      "wander_strength": 0.28
+    },
+    {
+      "type": "family",
+      "weight": 2,
+      "size_min": 2,
+      "size_max": 3,
+      "spawn_edge": "top",
+      "goal_edge": "bottom",
+      "spawn_spread": 20,
+      "goal_spread": 18,
+      "desired_speed": 1.9,
+      "max_speed": 3.4,
+      "wander_strength": 0.26
+    }
+  ],
   "randomization": {
     "obstacle_jitter_px": 16,
     "obstacle_size_jitter_px": 12,
