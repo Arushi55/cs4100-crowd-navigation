@@ -147,19 +147,22 @@ def reassign_reached_goals(
         if ped.has_reached_goal():
             if ped.group_id is not None and ped.group_id not in respawned_groups:
                 group_members = [member for member in pedestrians if member.group_id == ped.group_id]
-                respawn_family_group_members(group_members, nav_grid, rng)
+                respawn_family_group_members(
+                    group_members,
+                    nav_grid,
+                    rng,
+                    obstacles=scenario.obstacles,
+                )
                 respawned_groups.add(ped.group_id)
                 continue
             if isinstance(ped.behavior, RandomWalkerBehavior):
-                (_, _), (gx, gy) = random_pedestrian_route(scenario, rng, ped.goal_region_indices)
+                # Keep RandomWalker velocity processing but handle goal reset from safe route
+                (_, _), (gx, gy) = random_pedestrian_route(
+                    scenario, rng, ped.goal_region_indices, obstacles=scenario.obstacles
+                )
                 ped.set_goal(gx, gy, nav_grid=nav_grid, rng=rng)
             else:
-                (sx, sy), (gx, gy) = random_pedestrian_route(scenario, rng, ped.goal_region_indices)
-                ped.x = sx
-                ped.y = sy
-                ped.vx = 0.0
-                ped.vy = 0.0
-                ped.set_goal(gx, gy, nav_grid=nav_grid, rng=rng)
+                ped.respawn(rng, obstacles=scenario.obstacles, nav_grid=nav_grid)
             if hasattr(ped.behavior, 'frame_count'):
                 ped.behavior.frame_count = 0
 

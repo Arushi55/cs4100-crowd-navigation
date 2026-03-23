@@ -1,3 +1,5 @@
+from __future__ import annotations
+
 from dataclasses import dataclass, field
 import math
 import pygame
@@ -41,12 +43,12 @@ class Pedestrian:
     ped_A: float = 8.0
     ped_B: float = 8.0
 
-    wall_A: float = 5.0
-    wall_B: float = 8.0
+    wall_A = 2.0
+    wall_B = 14.0
 
-    obstacle_A: float = 10.0
-    obstacle_B: float = 10.0
-    obstacle_range: float = 40.0
+    obstacle_A = 3.0
+    obstacle_B = 14.0
+    obstacle_range = 24.0
 
     def set_goal(
         self,
@@ -61,12 +63,13 @@ class Pedestrian:
         if nav_grid is not None:
             raw_path = nav_grid.find_path((self.x, self.y), (gx, gy))
             # Add tiny random offsets so pedestrians don't follow identical lines
-            if rng is not None and len(raw_path) > 1:
+            if rng is not None and len(raw_path) > 2:
                 jittered: list[tuple[float, float]] = []
                 for i, (wx, wy) in enumerate(raw_path):
-                    if i < len(raw_path) - 1:  # don't jitter the final goal
-                        wx += float(rng.uniform(-4, 4))
-                        wy += float(rng.uniform(-4, 4))
+                    # Never jitter start or final goal
+                    if 0 < i < len(raw_path) - 1:
+                        wx += float(rng.uniform(-1.5, 1.5))
+                        wy += float(rng.uniform(-1.5, 1.5))
                     jittered.append((wx, wy))
                 self._waypoints = jittered
             else:
@@ -80,10 +83,15 @@ class Pedestrian:
         if not self._waypoints:
             return self.goal_x, self.goal_y
 
-        # Advance past reached waypoints
         while self._waypoint_idx < len(self._waypoints) - 1:
             wx, wy = self._waypoints[self._waypoint_idx]
-            if math.hypot(wx - self.x, wy - self.y) < 18.0:
+            dist_curr = math.hypot(wx - self.x, wy - self.y)
+
+            nx, ny = self._waypoints[self._waypoint_idx + 1]
+            dist_next = math.hypot(nx - self.x, ny - self.y)
+
+            # Advance if close enough OR current waypoint has become worse than next
+            if dist_curr < 20.0 or dist_next + 4.0 < dist_curr:
                 self._waypoint_idx += 1
             else:
                 break
@@ -170,12 +178,108 @@ class Pedestrian:
                 fy += magnitude * ny
         return fx, fy
     
-    def respawn(self, rng: np.random.Generator) -> None:
-        self.x = float(rng.uniform(self.radius, WIDTH - self.radius))
-        self.y = HEIGHT + self.radius
+    def _obstacle_slide_force(self, obstacles: list[pygame.Rect] | None) -> tuple[float, float]:
+        if not obstacles:
+            return 0.0, 0.0
+
+        tx, ty = self.get_steering_target()
+        desired_dx = tx - self.x
+        desired_dy = ty - self.y
+        desired_dist = math.hypot(desired_dx, desired_dy)
+        if desired_dist < 1e-6:
+            return 0.0, 0.0
+
+        desired_dx /= desired_dist
+        desired_dy /= desired_dist
+
+        best_force = (0.0, 0.0)
+        best_dist = float("inf")
+
+        for rect in obstacles:
+            closest_x = max(rect.left, min(self.x, rect.right))
+            closest_y = max(rect.top, min(self.y, rect.bottom))
+            dx = self.x - closest_x
+            dy = self.y - closest_y
+            dist = math.hypot(dx, dy)
+            if dist < 1e-6:
+                continue
+
+            if dist < self.radius + 10.0 and dist < best_dist:
+                best_dist = dist
+                nx, ny = dx / dist, dy / dist
+
+                # Tangent direction
+                tx1, ty1 = -ny, nx
+                tx2, ty2 = ny, -nx
+
+                # Pick tangent that best matches goal direction
+                dot1 = tx1 * desired_dx + ty1 * desired_dy
+                dot2 = tx2 * desired_dx + ty2 * desired_dy
+                sx, sy = (tx1, ty1) if dot1 > dot2 else (tx2, ty2)
+
+                strength = max(0.0, 1.0 - dist / (self.radius + 10.0))
+                best_force = (sx * 0.25 * strength, sy * 0.25 * strength)
+
+        return best_force
+    
+    def _find_free_position(
+    self,
+    rng: np.random.Generator,
+    obstacles: list[pygame.Rect] | None,
+    x_min: float | None = None,
+    x_max: float | None = None,
+    y_min: float | None = None,
+    y_max: float | None = None,
+    max_tries: int = 200,
+) -> tuple[float, float]:
+        x_min = self.radius if x_min is None else x_min
+        x_max = WIDTH - self.radius if x_max is None else x_max
+        y_min = self.radius if y_min is None else y_min
+        y_max = HEIGHT - self.radius if y_max is None else y_max
+
+        for _ in range(max_tries):
+            x = float(rng.uniform(x_min, x_max))
+            y = float(rng.uniform(y_min, y_max))
+
+            if obstacles is None or not self._would_collide(x, y, obstacles):
+                return x, y
+
+        # Fallback: scan a coarse grid if random retries fail
+        step = max(2 * self.radius, 8)
+        for yy in range(int(y_min), int(y_max) + 1, step):
+            for xx in range(int(x_min), int(x_max) + 1, step):
+                if obstacles is None or not self._would_collide(float(xx), float(yy), obstacles):
+                    return float(xx), float(yy)
+
+        # Absolute fallback
+        return float(self.radius), float(self.radius)
+
+    def respawn(
+        self,
+        rng: np.random.Generator,
+        obstacles: list[pygame.Rect] | None = None,
+        nav_grid: "NavGrid | None" = None,
+    ) -> None:
+        self.x, self.y = self._find_free_position(
+            rng,
+            obstacles,
+            x_min=self.radius,
+            x_max=WIDTH - self.radius,
+            y_min=self.radius,
+            y_max=HEIGHT - self.radius,
+        )
         self.vx = 0.0
         self.vy = 0.0
-        self.goal_x = float(rng.uniform(self.radius, WIDTH - self.radius))
+
+        gx, gy = self._find_free_position(
+            rng,
+            obstacles,
+            x_min=self.radius,
+            x_max=WIDTH - self.radius,
+            y_min=self.radius,
+            y_max=max(self.radius, HEIGHT * 0.25),
+        )
+        self.set_goal(gx, gy, nav_grid=nav_grid, rng=rng)
 
     def update(
         self,
