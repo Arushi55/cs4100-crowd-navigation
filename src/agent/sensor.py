@@ -95,11 +95,13 @@ class RaySensor:
                 end_y = robot_y + math.sin(angle) * dist
                 for ped in pedestrians:
                     if math.hypot(end_x - ped.x, end_y - ped.y) <= ped.radius + 2:
-                        visible_ids.add(id(ped))
-                        visible.append(ped)
+                        ped_id = id(ped)
+                        if ped_id not in visible_ids:
+                            visible_ids.add(ped_id)
+                            visible.append(ped)
                         break
         
-        return list(visible)
+        return visible
 
     def _cast_single_ray(
         self,
