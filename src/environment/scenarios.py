@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 import pygame
 import numpy as np
@@ -226,6 +227,9 @@ def random_point_in_region(
     obstacles: list[pygame.Rect] | None = None,
     margin: int = 12,
     max_attempts: int = 40,
+    robot_x: float | None = None,
+    robot_y: float | None = None,
+    personal_space_radius: float = 0.0,
 ) -> tuple[float, float]:
     left = region.left + margin
     right = region.right - margin
@@ -236,13 +240,21 @@ def random_point_in_region(
         x = float(rng.uniform(left, right))
         y = float(rng.uniform(top, bottom))
         if not obstacles:
-            return x, y
-
-        if not any(
-            _circle_hits_rect((x, y), 10, obs)
-            for obs in obstacles
-        ):
-            return x, y
+            if robot_x is None or robot_y is None or personal_space_radius <= 0.0:
+                return x, y
+            dist_to_robot = math.hypot(x - robot_x, y - robot_y)
+            if dist_to_robot >= personal_space_radius:
+                return x, y
+        else:
+            if not any(
+                _circle_hits_rect((x, y), 10, obs)
+                for obs in obstacles
+            ):
+                if robot_x is None or robot_y is None or personal_space_radius <= 0.0:
+                    return x, y
+                dist_to_robot = math.hypot(x - robot_x, y - robot_y)
+                if dist_to_robot >= personal_space_radius:
+                    return x, y
 
     # Second pass: deterministic grid fallback to avoid obstacles
     step = max(6, margin)
@@ -252,7 +264,11 @@ def random_point_in_region(
                 _circle_hits_rect((float(xx), float(yy)), 10, obs)
                 for obs in obstacles
             ):
-                return float(xx), float(yy)
+                if robot_x is None or robot_y is None or personal_space_radius <= 0.0:
+                    return float(xx), float(yy)
+                dist_to_robot = math.hypot(float(xx) - robot_x, float(yy) - robot_y)
+                if dist_to_robot >= personal_space_radius:
+                    return float(xx), float(yy)
 
     # As a safe final fallback, return a valid point within region anyway
     return float(left), float(top)
@@ -263,6 +279,9 @@ def random_pedestrian_route(
     rng: np.random.Generator,
     goal_region_indices: list[int] | None = None,
     obstacles: list[pygame.Rect] | None = None,
+    robot_x: float | None = None,
+    robot_y: float | None = None,
+    personal_space_radius: float = 0.0,
 ) -> tuple[tuple[float, float], tuple[float, float]]:
     """
     Pick a random spawn and goal for a pedestrian.
@@ -285,7 +304,7 @@ def random_pedestrian_route(
         # Pick from all available goal regions
         goal_region = scenario.pedestrian_goal_regions[int(rng.integers(0, len(scenario.pedestrian_goal_regions)))]
     
-    spawn = random_point_in_region(spawn_region, rng, obstacles=obstacles)
+    spawn = random_point_in_region(spawn_region, rng, obstacles=obstacles, robot_x=robot_x, robot_y=robot_y, personal_space_radius=personal_space_radius)
     goal = random_point_in_region(goal_region, rng, obstacles=obstacles)
     return spawn, goal
 
@@ -461,6 +480,9 @@ def generate_pedestrian_population(
                     rng,
                     goal_region_indices,
                     obstacles=scenario.obstacles,
+                    robot_x=scenario.robot_start[0],
+                    robot_y=scenario.robot_start[1],
+                    personal_space_radius=52.0,  # from crowd_env.py
                 )
                 ped = Pedestrian(
                     x=sx,
@@ -481,6 +503,9 @@ def generate_pedestrian_population(
             scenario,
             rng,
             obstacles=scenario.obstacles,
+            robot_x=scenario.robot_start[0],
+            robot_y=scenario.robot_start[1],
+            personal_space_radius=52.0,
         )
         ped = Pedestrian(
             x=sx,
@@ -500,6 +525,9 @@ def respawn_family_group_members(
     nav_grid: NavGrid,
     rng: np.random.Generator,
     obstacles: list[pygame.Rect] | None = None,
+    robot_x: float | None = None,
+    robot_y: float | None = None,
+    personal_space_radius: float = 0.0,
 ) -> None:
     if not members:
         return
@@ -553,7 +581,7 @@ def respawn_family_group_members(
                     break
 
         if not safe_position_found:
-            ped.respawn(rng, obstacles=obstacle_list, nav_grid=nav_grid)
+            ped.respawn(rng, obstacles=obstacle_list, nav_grid=nav_grid, robot_x=robot_x, robot_y=robot_y, personal_space_radius=personal_space_radius)
             continue
 
         ped.x = sx

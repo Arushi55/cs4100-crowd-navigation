@@ -273,11 +273,14 @@ class CrowdNavEnv(gym.Env):
                         self.nav_grid,
                         self.rng,
                         obstacles=self.scenario.obstacles,
+                        robot_x=self.robot.x,
+                        robot_y=self.robot.y,
+                        personal_space_radius=self.personal_space_radius,
                     )
                     respawned_groups.add(ped.group_id)
                     continue
                 # Use Pedestrian.respawn to avoid obstacle collisions on respawn
-                ped.respawn(self.rng, obstacles=self.scenario.obstacles, nav_grid=self.nav_grid)
+                ped.respawn(self.rng, obstacles=self.scenario.obstacles, nav_grid=self.nav_grid, robot_x=self.robot.x, robot_y=self.robot.y, personal_space_radius=self.personal_space_radius)
 
     def _get_observation(self) -> np.ndarray:
         ray_obs = self.ray_sensor.cast_rays_flat(

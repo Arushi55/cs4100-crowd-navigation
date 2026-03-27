@@ -152,6 +152,9 @@ def reassign_reached_goals(
                     nav_grid,
                     rng,
                     obstacles=scenario.obstacles,
+                    robot_x=None,
+                    robot_y=None,
+                    personal_space_radius=0.0,
                 )
                 respawned_groups.add(ped.group_id)
                 continue
@@ -162,7 +165,7 @@ def reassign_reached_goals(
                 )
                 ped.set_goal(gx, gy, nav_grid=nav_grid, rng=rng)
             else:
-                ped.respawn(rng, obstacles=scenario.obstacles, nav_grid=nav_grid)
+                ped.respawn(rng, obstacles=scenario.obstacles, nav_grid=nav_grid, robot_x=None, robot_y=None, personal_space_radius=0.0)
             if hasattr(ped.behavior, 'frame_count'):
                 ped.behavior.frame_count = 0
 

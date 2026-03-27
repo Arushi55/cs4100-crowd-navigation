@@ -231,6 +231,9 @@ class Pedestrian:
     y_min: float | None = None,
     y_max: float | None = None,
     max_tries: int = 200,
+    robot_x: float | None = None,
+    robot_y: float | None = None,
+    personal_space_radius: float = 0.0,
 ) -> tuple[float, float]:
         x_min = self.radius if x_min is None else x_min
         x_max = WIDTH - self.radius if x_max is None else x_max
@@ -242,14 +245,22 @@ class Pedestrian:
             y = float(rng.uniform(y_min, y_max))
 
             if obstacles is None or not self._would_collide(x, y, obstacles):
-                return x, y
+                if robot_x is None or robot_y is None or personal_space_radius <= 0.0:
+                    return x, y
+                dist_to_robot = math.hypot(x - robot_x, y - robot_y)
+                if dist_to_robot >= personal_space_radius:
+                    return x, y
 
         # Fallback: scan a coarse grid if random retries fail
         step = max(2 * self.radius, 8)
         for yy in range(int(y_min), int(y_max) + 1, step):
             for xx in range(int(x_min), int(x_max) + 1, step):
                 if obstacles is None or not self._would_collide(float(xx), float(yy), obstacles):
-                    return float(xx), float(yy)
+                    if robot_x is None or robot_y is None or personal_space_radius <= 0.0:
+                        return float(xx), float(yy)
+                    dist_to_robot = math.hypot(float(xx) - robot_x, float(yy) - robot_y)
+                    if dist_to_robot >= personal_space_radius:
+                        return float(xx), float(yy)
 
         # Absolute fallback
         return float(self.radius), float(self.radius)
@@ -259,6 +270,9 @@ class Pedestrian:
         rng: np.random.Generator,
         obstacles: list[pygame.Rect] | None = None,
         nav_grid: "NavGrid | None" = None,
+        robot_x: float | None = None,
+        robot_y: float | None = None,
+        personal_space_radius: float = 0.0,
     ) -> None:
         self.x, self.y = self._find_free_position(
             rng,
@@ -267,6 +281,9 @@ class Pedestrian:
             x_max=WIDTH - self.radius,
             y_min=self.radius,
             y_max=HEIGHT - self.radius,
+            robot_x=robot_x,
+            robot_y=robot_y,
+            personal_space_radius=personal_space_radius,
         )
         self.vx = 0.0
         self.vy = 0.0
@@ -278,6 +295,9 @@ class Pedestrian:
             x_max=WIDTH - self.radius,
             y_min=self.radius,
             y_max=max(self.radius, HEIGHT * 0.25),
+            robot_x=robot_x,
+            robot_y=robot_y,
+            personal_space_radius=personal_space_radius,
         )
         self.set_goal(gx, gy, nav_grid=nav_grid, rng=rng)
 
