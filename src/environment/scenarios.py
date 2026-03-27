@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import math
 from pathlib import Path
 import pygame
 import numpy as np
@@ -223,22 +224,64 @@ def build_scenario(
 def random_point_in_region(
     region: pygame.Rect,
     rng: np.random.Generator,
+    obstacles: list[pygame.Rect] | None = None,
     margin: int = 12,
+    max_attempts: int = 40,
+    robot_x: float | None = None,
+    robot_y: float | None = None,
+    personal_space_radius: float = 0.0,
 ) -> tuple[float, float]:
     left = region.left + margin
     right = region.right - margin
     top = region.top + margin
     bottom = region.bottom - margin
-    return (
-        float(rng.uniform(left, right)),
-        float(rng.uniform(top, bottom)),
-    )
+
+    for _ in range(max_attempts):
+        x = float(rng.uniform(left, right))
+        y = float(rng.uniform(top, bottom))
+        if not obstacles:
+            if robot_x is None or robot_y is None or personal_space_radius <= 0.0:
+                return x, y
+            dist_to_robot = math.hypot(x - robot_x, y - robot_y)
+            if dist_to_robot >= personal_space_radius:
+                return x, y
+        else:
+            if not any(
+                _circle_hits_rect((x, y), 10, obs)
+                for obs in obstacles
+            ):
+                if robot_x is None or robot_y is None or personal_space_radius <= 0.0:
+                    return x, y
+                dist_to_robot = math.hypot(x - robot_x, y - robot_y)
+                if dist_to_robot >= personal_space_radius:
+                    return x, y
+
+    # Second pass: deterministic grid fallback to avoid obstacles
+    step = max(6, margin)
+    for yy in range(int(top), int(bottom) + 1, step):
+        for xx in range(int(left), int(right) + 1, step):
+            if not obstacles or not any(
+                _circle_hits_rect((float(xx), float(yy)), 10, obs)
+                for obs in obstacles
+            ):
+                if robot_x is None or robot_y is None or personal_space_radius <= 0.0:
+                    return float(xx), float(yy)
+                dist_to_robot = math.hypot(float(xx) - robot_x, float(yy) - robot_y)
+                if dist_to_robot >= personal_space_radius:
+                    return float(xx), float(yy)
+
+    # As a safe final fallback, return a valid point within region anyway
+    return float(left), float(top)
 
 
 def random_pedestrian_route(
     scenario: Scenario,
     rng: np.random.Generator,
     goal_region_indices: list[int] | None = None,
+    obstacles: list[pygame.Rect] | None = None,
+    robot_x: float | None = None,
+    robot_y: float | None = None,
+    personal_space_radius: float = 0.0,
 ) -> tuple[tuple[float, float], tuple[float, float]]:
     """
     Pick a random spawn and goal for a pedestrian.
@@ -248,6 +291,7 @@ def random_pedestrian_route(
         rng: Random number generator
         goal_region_indices: If provided, only pick goals from these region indices.
                             If None, all goal regions are available.
+        obstacles: Optional obstacle list to avoid during spawn.
     """
     spawn_region = scenario.pedestrian_spawn_regions[int(rng.integers(0, len(scenario.pedestrian_spawn_regions)))]
     
@@ -260,8 +304,8 @@ def random_pedestrian_route(
         # Pick from all available goal regions
         goal_region = scenario.pedestrian_goal_regions[int(rng.integers(0, len(scenario.pedestrian_goal_regions)))]
     
-    spawn = random_point_in_region(spawn_region, rng)
-    goal = random_point_in_region(goal_region, rng)
+    spawn = random_point_in_region(spawn_region, rng, obstacles=obstacles, robot_x=robot_x, robot_y=robot_y, personal_space_radius=personal_space_radius)
+    goal = random_point_in_region(goal_region, rng, obstacles=obstacles)
     return spawn, goal
 
 
@@ -287,6 +331,25 @@ def _sample_edge_point(
     if edge == "bottom":
         return float(rng.uniform(axis_padding, WIDTH - axis_padding)), float(HEIGHT - padding)
     raise ValueError(f"Unsupported edge '{edge}'")
+
+
+def _sample_edge_point_safe(
+    edge: str,
+    rng: np.random.Generator,
+    obstacles: list[pygame.Rect] | None,
+    padding: int = 18,
+    max_attempts: int = 40,
+) -> tuple[float, float]:
+    if not obstacles:
+        return _sample_edge_point(edge, rng, padding)
+
+    for _ in range(max_attempts):
+        x, y = _sample_edge_point(edge, rng, padding)
+        if not any(_circle_hits_rect((x, y), 10, obs) for obs in obstacles):
+            return x, y
+
+    # Fallback to non-safe if we cannot find in a reasonable number of tries
+    return _sample_edge_point(edge, rng, padding)
 
 
 def _sample_group_member_positions(
@@ -416,6 +479,10 @@ def generate_pedestrian_population(
                     scenario,
                     rng,
                     goal_region_indices,
+                    obstacles=scenario.obstacles,
+                    robot_x=scenario.robot_start[0],
+                    robot_y=scenario.robot_start[1],
+                    personal_space_radius=52.0,  # from crowd_env.py
                 )
                 ped = Pedestrian(
                     x=sx,
@@ -432,7 +499,14 @@ def generate_pedestrian_population(
         return pedestrians
 
     for _ in range(count):
-        (sx, sy), (gx, gy) = random_pedestrian_route(scenario, rng)
+        (sx, sy), (gx, gy) = random_pedestrian_route(
+            scenario,
+            rng,
+            obstacles=scenario.obstacles,
+            robot_x=scenario.robot_start[0],
+            robot_y=scenario.robot_start[1],
+            personal_space_radius=52.0,
+        )
         ped = Pedestrian(
             x=sx,
             y=sy,
@@ -450,6 +524,10 @@ def respawn_family_group_members(
     members: list[Pedestrian],
     nav_grid: NavGrid,
     rng: np.random.Generator,
+    obstacles: list[pygame.Rect] | None = None,
+    robot_x: float | None = None,
+    robot_y: float | None = None,
+    personal_space_radius: float = 0.0,
 ) -> None:
     if not members:
         return
@@ -458,27 +536,57 @@ def respawn_family_group_members(
     if template_member.spawn_edge is None or template_member.goal_edge is None:
         return
 
-    spawn_anchor = _sample_edge_point(template_member.spawn_edge, rng)
-    goal_anchor = _sample_edge_point(template_member.goal_edge, rng)
+    obstacle_list = obstacles or []
+
+    spawn_anchor = _sample_edge_point_safe(template_member.spawn_edge, rng, obstacle_list)
+    goal_anchor = _sample_edge_point_safe(template_member.goal_edge, rng, obstacle_list)
+
     positions = _sample_group_member_positions(
         spawn_anchor,
         len(members),
         rng,
         spread=template_member.group_spawn_spread,
     )
-    group_goal = _clamp_world_point(
-        goal_anchor[0] + float(
-            rng.uniform(-template_member.group_goal_spread, template_member.group_goal_spread)
-        ),
-        goal_anchor[1] + float(
-            rng.uniform(-template_member.group_goal_spread, template_member.group_goal_spread)
-        ),
-    )
+
+    # Pick a group goal that is not inside an obstacle
+    group_goal = None
+    for _ in range(40):
+        candidate_goal = _clamp_world_point(
+            goal_anchor[0] + float(rng.uniform(-template_member.group_goal_spread, template_member.group_goal_spread)),
+            goal_anchor[1] + float(rng.uniform(-template_member.group_goal_spread, template_member.group_goal_spread)),
+        )
+        if not any(_circle_hits_rect(candidate_goal, 10, obs) for obs in obstacle_list):
+            group_goal = candidate_goal
+            break
+
+    if group_goal is None:
+        group_goal = _clamp_world_point(goal_anchor[0], goal_anchor[1])
 
     for ped, (sx, sy) in zip(members, positions):
-        gx, gy = group_goal
+        safe_position_found = False
+
+        # First try the sampled group position
+        if not any(_circle_hits_rect((sx, sy), 10, obs) for obs in obstacle_list):
+            safe_position_found = True
+        else:
+            # Resample around the spawn anchor
+            for _ in range(40):
+                candidate_x, candidate_y = _clamp_world_point(
+                    spawn_anchor[0] + float(rng.uniform(-template_member.group_spawn_spread, template_member.group_spawn_spread)),
+                    spawn_anchor[1] + float(rng.uniform(-template_member.group_spawn_spread, template_member.group_spawn_spread)),
+                )
+                if not any(_circle_hits_rect((candidate_x, candidate_y), 10, obs) for obs in obstacle_list):
+                    sx, sy = candidate_x, candidate_y
+                    safe_position_found = True
+                    break
+
+        if not safe_position_found:
+            ped.respawn(rng, obstacles=obstacle_list, nav_grid=nav_grid, robot_x=robot_x, robot_y=robot_y, personal_space_radius=personal_space_radius)
+            continue
+
         ped.x = sx
         ped.y = sy
         ped.vx = 0.0
         ped.vy = 0.0
+        gx, gy = group_goal
         ped.set_goal(gx, gy, nav_grid=nav_grid, rng=rng)
