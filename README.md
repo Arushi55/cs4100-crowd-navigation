@@ -57,107 +57,46 @@ Controls:
 - `1`, `2`, `3` switch scenarios
 - close the pygame window to exit
 
-## RL training workflow
+## RL training workflow (DQN)
 
-The main training entrypoint is:
+We removed stable-baselines3 and now train with a lightweight PyTorch DQN.
 
-```bash
-python src/train.py
-```
-
-The current recommended setup is PPO with frame stacking on a single scenario while varying pedestrian count across episodes.
-
-### Recommended airport command
-
-This is the best starting point for the current repo:
+Main entrypoint (wraps `src/dqn.py`):
 
 ```bash
 python src/train.py \
-  --algo ppo \
   --scenario airport \
   --vary-pedestrians \
-  --pedestrians-min 16 \
-  --pedestrians-max 30 \
+  --pedestrians-min 12 \
+  --pedestrians-max 24 \
   --ped-speed-min 0.95 \
   --ped-speed-max 1.15 \
   --frame-stack 4 \
-  --num-envs 4 \
-  --total-timesteps 120000 \
-  --max-episode-steps 1000 \
-  --learning-rate 3e-4 \
+  --total-steps 200000 \
+  --buffer-size 200000 \
   --batch-size 256 \
-  --n-steps 1024 \
-  --gamma 0.995 \
-  --ent-coef 0.01 \
-  --eval-freq 10000 \
-  --checkpoint-freq 25000 \
-  --output-dir training_output/airport_ppo_run
+  --learning-rate 3e-4 \
+  --target-update 2000 \
+  --output-dir training_output/dqn
 ```
 
-### What the training script saves
+What gets saved under `output-dir`:
 
-Each run writes a folder under `training_output/` containing:
+- `dqn.pt` (model weights)
+- `run_config.json` (run metadata)
 
-- `best_model/best_model.zip`
-- `final_model.zip`
-- `checkpoints/`
-- `logs/`
-- `run_config.json`
-
-`best_model.zip` is usually the model you want to evaluate or visualize first.
-
-### Resume training
-
-To continue from an existing checkpoint:
+### Evaluate a DQN
 
 ```bash
-python src/train.py \
-  --algo ppo \
-  --scenario airport \
-  --vary-pedestrians \
-  --pedestrians-min 16 \
-  --pedestrians-max 30 \
-  --frame-stack 4 \
-  --num-envs 4 \
-  --total-timesteps 80000 \
-  --resume training_output/airport_ppo_run/best_model/best_model.zip \
-  --output-dir training_output/airport_ppo_run_resume
+python src/evaluate.py --model training_output/dqn/dqn.pt --scenario airport --episodes 10 --fps 20
 ```
 
-## Training parameters that matter most
+### Benchmark across crowd sizes/speeds
 
-These are the ones the team will probably tweak most often:
+```bash
+python src/benchmark.py training_output/dqn/dqn.pt
+```
 
-- `--algo`
-  - `ppo` is the default and the recommended option now
-  - `dqn` still works, but is generally weaker on the current dynamic crowd setup
-- `--scenario`
-  - choose the map to train on
-- `--pedestrians`
-  - fixed pedestrian count for single-density training
-- `--vary-pedestrians`
-  - randomizes pedestrian count every episode for one scenario
-- `--pedestrians-min`, `--pedestrians-max`
-  - crowd range when varying pedestrians
-- `--ped-speed-min`, `--ped-speed-max`
-  - speed multiplier range applied each episode in variable-crowd environments
-- `--frame-stack`
-  - how many consecutive observations are stacked together
-  - current recommended value is `4`
-- `--num-envs`
-  - number of parallel PPO envs
-  - current recommended value is `4`
-- `--total-timesteps`
-  - total training budget
-- `--max-episode-steps`
-  - timeout horizon before an episode truncates
-- `--learning-rate`
-  - PPO default in the script is `1e-4`, but our stronger recent airport runs used `3e-4` or `2.5e-4`
-- `--batch-size`
-  - typical PPO values we used were `256`
-- `--n-steps`
-  - PPO rollout length per env before update
-  - typical value: `1024`
 - `--gamma`
   - reward discount factor
   - recent runs used `0.995`

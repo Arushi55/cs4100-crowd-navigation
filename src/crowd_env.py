@@ -633,6 +633,13 @@ class CrowdNavEnv(gym.Env):
             else:
                 self.screen = pygame.Surface((WIDTH, HEIGHT))
             self.clock = pygame.time.Clock()
+
+        # Pump events so the OS can create/update the window
+        for event in pygame.event.get():
+            if event.type == pygame.QUIT:
+                self.close()
+                return None
+        pygame.event.pump()  # ensures window stays responsive on macOS
         
         # colors
         bg_color = (245, 247, 240)
