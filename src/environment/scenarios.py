@@ -318,6 +318,43 @@ def _normalize_group_specs(
     return raw_specs, weights / total
 
 
+def _scaled_behavior_counts(
+    behavior_specs: list[dict[str, int | str]],
+    target_count: int,
+) -> list[int]:
+    """
+    Scale per-behavior template counts to match the requested pedestrian total.
+
+    This preserves the relative behavior mix from scenario JSON while allowing
+    runtime flags (e.g., --pedestrians) to control total population size.
+    """
+    if target_count <= 0 or not behavior_specs:
+        return [0 for _ in behavior_specs]
+
+    base_counts = np.array(
+        [max(0, int(spec.get("count", 0))) for spec in behavior_specs],
+        dtype=np.float64,
+    )
+    total_base = float(base_counts.sum())
+    if total_base <= 0:
+        # If template counts are missing/invalid, fall back to uniform mix.
+        base_counts = np.ones(len(behavior_specs), dtype=np.float64)
+        total_base = float(len(behavior_specs))
+
+    scaled_float = (base_counts / total_base) * float(target_count)
+    scaled = np.floor(scaled_float).astype(int)
+    remaining = int(target_count - int(scaled.sum()))
+    if remaining <= 0:
+        return scaled.tolist()
+
+    # Largest-remainder allocation to hit exact target_count.
+    fractional = scaled_float - scaled
+    order = np.argsort(-fractional)
+    for idx in order[:remaining]:
+        scaled[int(idx)] += 1
+    return scaled.tolist()
+
+
 def _generate_family_groups(
     scenario: Scenario,
     template: ScenarioTemplate,
@@ -340,8 +377,10 @@ def _generate_family_groups(
         size_max = int(spec.get("size_max", size_min))
         group_size = int(rng.integers(size_min, size_max + 1))
         remaining = target_count - len(pedestrians)
-        if remaining < group_size and remaining >= 2:
-            group_size = remaining
+        if remaining <= 0:
+            break
+        # Clamp to remaining slots so requested count is exact even for odd totals.
+        group_size = min(group_size, remaining)
 
         spawn_edge = str(spec.get("spawn_edge", "left"))
         goal_edge = str(spec.get("goal_edge", "right"))
@@ -408,8 +447,8 @@ def generate_pedestrian_population(
 
     pedestrians: list[Pedestrian] = []
     if template.pedestrian_behaviors:
-        for behavior_spec in template.pedestrian_behaviors:
-            behavior_count = int(behavior_spec.get("count", 0))
+        behavior_counts = _scaled_behavior_counts(template.pedestrian_behaviors, count)
+        for behavior_spec, behavior_count in zip(template.pedestrian_behaviors, behavior_counts):
             for _ in range(behavior_count):
                 behavior, goal_region_indices = _build_behavior(behavior_spec)
                 (sx, sy), (gx, gy) = random_pedestrian_route(
