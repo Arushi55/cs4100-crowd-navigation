@@ -1,6 +1,6 @@
 numpy>=1.26,<3
 pygame>=2.5,<3
 gymnasium>=0.29,<1
-stable-baselines3>=2.3,<3
 torch>=2.2,<3
 tensorboard>=2.16,<3
+tqdm>=4.66,<5

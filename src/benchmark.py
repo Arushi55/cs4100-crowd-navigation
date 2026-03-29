@@ -1,4 +1,4 @@
-"""Benchmark: test trained agent against varying pedestrian count and speed."""
+"""Benchmark a trained DQN agent across crowd sizes and speeds."""
 
 from __future__ import annotations
 
@@ -7,15 +7,11 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from stable_baselines3 import DQN, PPO
+import torch
 
 from crowd_env import CrowdNavEnv
 from wrappers import ObservationStackWrapper
-
-ALGORITHMS = {
-    "dqn": DQN,
-    "ppo": PPO,
-}
+from dqn import QNetwork
 
 
 def run_benchmark(
@@ -32,14 +28,26 @@ def run_benchmark(
     if speed_multipliers is None:
         speed_multipliers = [1.0, 1.5, 2.0, 3.0]
 
-    model_type, frame_stack = load_model_config(Path(model_path))
-    model = ALGORITHMS[model_type].load(model_path)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    _, frame_stack = load_model_config(Path(model_path))
+    # Build a temp env to size the network
+    tmp_env = CrowdNavEnv(scenario_id=scenario, num_pedestrians=ped_counts[0] if ped_counts else 8, max_steps=max_steps, seed=seed, render_mode=None)
+    if frame_stack > 1:
+        tmp_env = ObservationStackWrapper(tmp_env, stack_size=frame_stack)
+    obs_dim = int(np.prod(tmp_env.observation_space.shape))
+    action_dim = tmp_env.action_space.n
+    tmp_env.close()
+
+    ckpt = torch.load(model_path, map_location=device)
+    model = QNetwork(obs_dim, action_dim).to(device)
+    model.load_state_dict(ckpt["q_net"])
+    model.eval()
 
     print("=" * 80)
     print("  Crowd Navigation — Scalability Benchmark")
     print("=" * 80)
     print(f"  Model:    {model_path}")
-    print(f"  Algo:     {model_type.upper()}  |  Frame stack: {frame_stack}")
+    print(f"  Algo:     DQN  |  Frame stack: {frame_stack}")
     print(f"  Scenario: {scenario}  |  Episodes per config: {episodes}")
     print(f"  Max steps: {max_steps}")
     print("=" * 80)
@@ -56,7 +64,7 @@ def run_benchmark(
 
     count_results = []
     for n_peds in ped_counts:
-        stats = _evaluate(model, scenario, n_peds, 1.0, episodes, max_steps, seed, frame_stack)
+        stats = _evaluate(model, scenario, n_peds, 1.0, episodes, max_steps, seed, frame_stack, device)
         count_results.append((n_peds, stats))
         print(
             f"  {n_peds:>6d} | {stats['success_rate']:>7.0f}% | "
@@ -77,7 +85,7 @@ def run_benchmark(
 
     speed_results = []
     for speed_mult in speed_multipliers:
-        stats = _evaluate(model, scenario, 8, speed_mult, episodes, max_steps, seed, frame_stack)
+        stats = _evaluate(model, scenario, 8, speed_mult, episodes, max_steps, seed, frame_stack, device)
         speed_results.append((speed_mult, stats))
         print(
             f"  {speed_mult:>5.1f}× | {stats['success_rate']:>7.0f}% | "
@@ -104,7 +112,7 @@ def run_benchmark(
     print(f"  {'─'*6}-{'─'*6}-+-{'─'*8}-+-{'─'*10}-+-{'─'*11}-+-{'─'*10}-+-{'─'*8}-+-{'─'*8}")
 
     for n_peds, speed_mult in stress_configs:
-        stats = _evaluate(model, scenario, n_peds, speed_mult, episodes, max_steps, seed, frame_stack)
+        stats = _evaluate(model, scenario, n_peds, speed_mult, episodes, max_steps, seed, frame_stack, device)
         print(
             f"  {n_peds:>6d} {speed_mult:>5.1f}× | {stats['success_rate']:>7.0f}% | "
             f"{stats['avg_steps']:>10.0f} | {stats['avg_reward']:>11.1f} | "
@@ -118,19 +126,16 @@ def run_benchmark(
 
 
 def load_model_config(model_path: Path) -> tuple[str, int]:
-    candidate_paths = [
-        model_path.parent / "run_config.json",
-        model_path.parent.parent / "run_config.json",
-    ]
-    for path in candidate_paths:
+    for path in [model_path.parent / "run_config.json", model_path.parent.parent / "run_config.json"]:
         if path.exists():
             data = json.loads(path.read_text(encoding="utf-8"))
             return data.get("algo", "dqn"), int(data.get("frame_stack", 1))
     return "dqn", 1
 
 
+@torch.no_grad()
 def _evaluate(
-    model,
+    model: QNetwork,
     scenario: str,
     n_peds: int,
     speed_mult: float,
@@ -138,6 +143,7 @@ def _evaluate(
     max_steps: int,
     seed: int,
     frame_stack: int,
+    device: torch.device,
 ) -> dict:
     env = CrowdNavEnv(
         scenario_id=scenario,
@@ -171,8 +177,9 @@ def _evaluate(
         done = False
 
         while not done:
-            action, _ = model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = env.step(int(action))
+            obs_t = torch.as_tensor(obs, device=device, dtype=torch.float32).unsqueeze(0)
+            action = int(torch.argmax(model(obs_t), dim=1).item())
+            obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
             total_collisions += info.get("collisions", 0)
             total_near_misses += info.get("near_misses", 0)
@@ -206,7 +213,7 @@ def _evaluate(
 
 if __name__ == "__main__":
     repo_root = Path(__file__).resolve().parent.parent
-    default_model = repo_root / "training_output" / "best_model" / "best_model.zip"
+    default_model = repo_root / "training_output" / "dqn" / "dqn.pt"
 
     model_path = sys.argv[1] if len(sys.argv) > 1 else str(default_model)
 
