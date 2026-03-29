@@ -55,6 +55,23 @@ def _tuple4(raw: list[int]) -> tuple[int, int, int, int]:
     return int(raw[0]), int(raw[1]), int(raw[2]), int(raw[3])
 
 
+def _point_hits_obstacles(
+    x: float,
+    y: float,
+    obstacles: list[pygame.Rect] | None,
+    clearance_radius: int,
+) -> bool:
+    if not obstacles:
+        return False
+    hitbox = pygame.Rect(
+        int(x - clearance_radius),
+        int(y - clearance_radius),
+        clearance_radius * 2,
+        clearance_radius * 2,
+    )
+    return any(hitbox.colliderect(obstacle) for obstacle in obstacles)
+
+
 def _build_behavior(behavior_spec: dict[str, int | str]) -> tuple[PedestrianBehavior, list[int] | None]:
     """
     Factory function to create behaviors from scenario config specs.
@@ -224,15 +241,39 @@ def random_point_in_region(
     region: pygame.Rect,
     rng: np.random.Generator,
     margin: int = 12,
+    obstacles: list[pygame.Rect] | None = None,
+    clearance_radius: int = 10,
+    max_attempts: int = 80,
 ) -> tuple[float, float]:
-    left = region.left + margin
-    right = region.right - margin
-    top = region.top + margin
-    bottom = region.bottom - margin
-    return (
-        float(rng.uniform(left, right)),
-        float(rng.uniform(top, bottom)),
-    )
+    left = max(0.0, float(region.left + margin))
+    right = min(float(WIDTH), float(region.right - margin))
+    top = max(0.0, float(region.top + margin))
+    bottom = min(float(HEIGHT), float(region.bottom - margin))
+
+    if right <= left:
+        left = float(region.centerx)
+        right = left + 1.0
+    if bottom <= top:
+        top = float(region.centery)
+        bottom = top + 1.0
+
+    for _ in range(max_attempts):
+        x = float(rng.uniform(left, right))
+        y = float(rng.uniform(top, bottom))
+        if not _point_hits_obstacles(x, y, obstacles, clearance_radius):
+            return x, y
+
+    # Fallback: deterministic scan for a valid point within the region.
+    scan_step = max(4, clearance_radius // 2)
+    for py in range(int(top), int(bottom) + 1, scan_step):
+        for px in range(int(left), int(right) + 1, scan_step):
+            x = float(px)
+            y = float(py)
+            if not _point_hits_obstacles(x, y, obstacles, clearance_radius):
+                return x, y
+
+    # Last resort (region may be fully blocked): return center.
+    return float(region.centerx), float(region.centery)
 
 
 def random_pedestrian_route(
@@ -260,8 +301,16 @@ def random_pedestrian_route(
         # Pick from all available goal regions
         goal_region = scenario.pedestrian_goal_regions[int(rng.integers(0, len(scenario.pedestrian_goal_regions)))]
     
-    spawn = random_point_in_region(spawn_region, rng)
-    goal = random_point_in_region(goal_region, rng)
+    spawn = random_point_in_region(
+        spawn_region,
+        rng,
+        obstacles=scenario.obstacles,
+    )
+    goal = random_point_in_region(
+        goal_region,
+        rng,
+        obstacles=scenario.obstacles,
+    )
     return spawn, goal
 
 
@@ -294,12 +343,23 @@ def _sample_group_member_positions(
     size: int,
     rng: np.random.Generator,
     spread: float,
+    obstacles: list[pygame.Rect] | None = None,
+    clearance_radius: int = 10,
+    max_attempts: int = 60,
 ) -> list[tuple[float, float]]:
     points: list[tuple[float, float]] = []
     for _ in range(size):
-        px = anchor[0] + float(rng.uniform(-spread, spread))
-        py = anchor[1] + float(rng.uniform(-spread, spread))
-        points.append(_clamp_world_point(px, py))
+        chosen: tuple[float, float] | None = None
+        for _attempt in range(max_attempts):
+            px = anchor[0] + float(rng.uniform(-spread, spread))
+            py = anchor[1] + float(rng.uniform(-spread, spread))
+            x, y = _clamp_world_point(px, py)
+            if not _point_hits_obstacles(x, y, obstacles, clearance_radius):
+                chosen = (x, y)
+                break
+        if chosen is None:
+            chosen = _clamp_world_point(anchor[0], anchor[1])
+        points.append(chosen)
     return points
 
 
@@ -401,10 +461,23 @@ def _generate_family_groups(
             group_size,
             rng,
             spread=spawn_spread,
+            obstacles=scenario.obstacles,
         )
-        group_goal = _clamp_world_point(
+        raw_goal = _clamp_world_point(
             goal_anchor[0] + float(rng.uniform(-goal_spread, goal_spread)),
             goal_anchor[1] + float(rng.uniform(-goal_spread, goal_spread)),
+        )
+        goal_region = pygame.Rect(
+            int(max(0, raw_goal[0] - goal_spread)),
+            int(max(0, raw_goal[1] - goal_spread)),
+            int(goal_spread * 2),
+            int(goal_spread * 2),
+        )
+        group_goal = random_point_in_region(
+            goal_region,
+            rng,
+            margin=0,
+            obstacles=scenario.obstacles,
         )
 
         for sx, sy in member_positions:
@@ -487,6 +560,7 @@ def generate_pedestrian_population(
 
 def respawn_family_group_members(
     members: list[Pedestrian],
+    scenario: Scenario,
     nav_grid: NavGrid,
     rng: np.random.Generator,
 ) -> None:
@@ -504,14 +578,27 @@ def respawn_family_group_members(
         len(members),
         rng,
         spread=template_member.group_spawn_spread,
+        obstacles=scenario.obstacles,
     )
-    group_goal = _clamp_world_point(
+    raw_goal = _clamp_world_point(
         goal_anchor[0] + float(
             rng.uniform(-template_member.group_goal_spread, template_member.group_goal_spread)
         ),
         goal_anchor[1] + float(
             rng.uniform(-template_member.group_goal_spread, template_member.group_goal_spread)
         ),
+    )
+    goal_region = pygame.Rect(
+        int(max(0, raw_goal[0] - template_member.group_goal_spread)),
+        int(max(0, raw_goal[1] - template_member.group_goal_spread)),
+        int(template_member.group_goal_spread * 2),
+        int(template_member.group_goal_spread * 2),
+    )
+    group_goal = random_point_in_region(
+        goal_region,
+        rng,
+        margin=0,
+        obstacles=scenario.obstacles,
     )
 
     for ped, (sx, sy) in zip(members, positions):

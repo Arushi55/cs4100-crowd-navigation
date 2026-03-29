@@ -147,7 +147,7 @@ def reassign_reached_goals(
         if ped.has_reached_goal():
             if ped.group_id is not None and ped.group_id not in respawned_groups:
                 group_members = [member for member in pedestrians if member.group_id == ped.group_id]
-                respawn_family_group_members(group_members, nav_grid, rng)
+                respawn_family_group_members(group_members, scenario, nav_grid, rng)
                 respawned_groups.add(ped.group_id)
                 continue
             if isinstance(ped.behavior, RandomWalkerBehavior):

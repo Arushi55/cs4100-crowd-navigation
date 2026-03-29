@@ -268,7 +268,7 @@ class CrowdNavEnv(gym.Env):
                     group_members = [
                         member for member in self.pedestrians if member.group_id == ped.group_id
                     ]
-                    respawn_family_group_members(group_members, self.nav_grid, self.rng)
+                    respawn_family_group_members(group_members, self.scenario, self.nav_grid, self.rng)
                     respawned_groups.add(ped.group_id)
                     continue
                 (sx, sy), (gx, gy) = random_pedestrian_route(self.scenario, self.rng)
