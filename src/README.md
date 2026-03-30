@@ -53,7 +53,3 @@ After: Next destination region is sampled from scenario transition weights.
 13. Initial behavior realism pass.
 Before: Initial route and velocity were simplistic and often static at t=0.
 After: Initial OD-biased routing, profile heterogeneity, and seeded motion are applied.
-
-14. Lifecycle logic deduplication.
-Before: `main.py` and `crowd_env.py` had duplicated reassignment and flow logic.
-After: Shared lifecycle module keeps behavior consistent and reduces maintenance risk.
