@@ -4,7 +4,7 @@ import pygame
 import numpy as np
 from typing import TYPE_CHECKING
 
-from constants import HEIGHT, WIDTH
+from constants import HEIGHT, WIDTH, SIM_SECONDS_PER_STEP, WORLD_METERS_PER_PIXEL
 
 if TYPE_CHECKING:
     from environment.behaviors import PedestrianBehavior
@@ -35,8 +35,10 @@ class Pedestrian:
     _waypoint_idx: int = field(default=0, repr=False)
 
     desired_speed: float = 1.5
-    relaxation_time: float = 30.0
+    relaxation_time: float = 18.0
     max_speed: float = 3.0
+    max_acceleration_mps2: float = 3.0
+    max_turn_rate_deg_per_sec: float = 240.0
 
     ped_A: float = 8.0
     ped_B: float = 8.0
@@ -47,6 +49,27 @@ class Pedestrian:
     obstacle_A: float = 10.0
     obstacle_B: float = 10.0
     obstacle_range: float = 40.0
+
+    def desired_speed_step(self) -> float:
+        """Desired cruising speed in px/step."""
+        return self.desired_speed * SIM_SECONDS_PER_STEP / WORLD_METERS_PER_PIXEL
+
+    def max_speed_step(self) -> float:
+        """Maximum speed in px/step."""
+        return self.max_speed * SIM_SECONDS_PER_STEP / WORLD_METERS_PER_PIXEL
+
+    def max_delta_v_step(self) -> float:
+        """Maximum change in velocity (px/step) allowed per simulation step."""
+        return (
+            self.max_acceleration_mps2
+            * SIM_SECONDS_PER_STEP
+            * SIM_SECONDS_PER_STEP
+            / WORLD_METERS_PER_PIXEL
+        )
+
+    def max_turn_step_radians(self) -> float:
+        """Maximum heading change in radians per simulation step."""
+        return math.radians(self.max_turn_rate_deg_per_sec) * SIM_SECONDS_PER_STEP
 
     def set_goal(
         self,
@@ -99,8 +122,9 @@ class Pedestrian:
         if dist < 1e-6:
             return 0.0, 0.0
         ex, ey = dx / dist, dy / dist
-        fx = (self.desired_speed * ex - self.vx) / self.relaxation_time
-        fy = (self.desired_speed * ey - self.vy) / self.relaxation_time
+        desired_speed = self.desired_speed_step()
+        fx = (desired_speed * ex - self.vx) / self.relaxation_time
+        fy = (desired_speed * ey - self.vy) / self.relaxation_time
         return fx, fy
 
     def _pedestrian_repulsion(self, others: list["Pedestrian"]) -> tuple[float, float]:

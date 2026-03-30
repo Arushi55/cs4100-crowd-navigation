@@ -26,8 +26,8 @@
     [710, 300, 200, 300]
   ],
   "pedestrian_behaviors": [
-    { "type": "zigzag", "count": 4 },
-    { "type": "social_force", "count": 4 },
+    { "type": "zigzag", "count": 2 },
+    { "type": "social_force", "count": 6 },
     { "type": "clump", "count": 2 },
     { "type": "random_walker", "count": 2, "goal_region_indices": [0, 1, 2, 3] }
   ],

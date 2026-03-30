@@ -20,6 +20,43 @@ from environment.pedestrian import Pedestrian
 from environment.pathfinding import NavGrid
 
 
+# Initial spawn-region -> goal-region preferences for more purposeful first trips.
+_INITIAL_SPAWN_TO_GOAL_WEIGHTS: dict[str, list[list[float]]] = {
+    "home": [
+        [0.45, 0.10, 0.30, 0.15],
+        [0.55, 0.10, 0.10, 0.25],
+        [0.15, 0.50, 0.15, 0.20],
+    ],
+    "shopping_center": [
+        [0.12, 0.18, 0.48, 0.22],
+        [0.30, 0.28, 0.22, 0.20],
+        [0.50, 0.10, 0.20, 0.20],
+    ],
+    "airport": [
+        [0.52, 0.08, 0.30, 0.10],
+        [0.08, 0.52, 0.10, 0.30],
+    ],
+}
+
+_INITIAL_SPEED_SCALE_BY_SCENARIO: dict[str, tuple[float, float]] = {
+    "home": (0.86, 1.10),
+    "shopping_center": (0.82, 1.16),
+    "airport": (0.88, 1.20),
+}
+
+_INITIAL_SPEED_FRACTION_BY_SCENARIO: dict[str, tuple[float, float]] = {
+    "home": (0.18, 0.38),
+    "shopping_center": (0.22, 0.48),
+    "airport": (0.25, 0.52),
+}
+
+_INITIAL_HEADING_JITTER_BY_SCENARIO: dict[str, float] = {
+    "home": 0.22,
+    "shopping_center": 0.18,
+    "airport": 0.12,
+}
+
+
 SCENARIO_CONFIG_DIR = Path(__file__).with_name("scenario_configs")
 
 
@@ -85,7 +122,7 @@ def _build_behavior(behavior_spec: dict[str, int | str]) -> tuple[PedestrianBeha
         goal_region_indices = [int(x) for x in goal_region_indices]
     
     if behavior_type == "stationary":
-        movement_prob = float(behavior_spec.get("movement_probability", 0.01))
+        movement_prob = float(behavior_spec.get("movement_probability", 0.08))
         return StationaryBehavior(movement_probability=movement_prob), goal_region_indices
     elif behavior_type == "random_walker":
         speed_mult = float(behavior_spec.get("speed_multiplier", 2.0))
@@ -314,6 +351,104 @@ def random_pedestrian_route(
     return spawn, goal
 
 
+def _sample_initial_goal_region_index(
+    scenario: Scenario,
+    rng: np.random.Generator,
+    spawn_region_idx: int,
+    goal_region_indices: list[int] | None = None,
+) -> int:
+    allowed = (
+        list(goal_region_indices)
+        if goal_region_indices is not None and len(goal_region_indices) > 0
+        else list(range(len(scenario.pedestrian_goal_regions)))
+    )
+    if not allowed:
+        return int(rng.integers(0, len(scenario.pedestrian_goal_regions)))
+    if len(allowed) == 1:
+        return int(allowed[0])
+
+    matrix = _INITIAL_SPAWN_TO_GOAL_WEIGHTS.get(scenario.scenario_id)
+    if matrix is not None and 0 <= spawn_region_idx < len(matrix):
+        row = matrix[spawn_region_idx]
+        raw_weights = []
+        for idx in allowed:
+            weight = float(row[idx]) if 0 <= idx < len(row) else 0.0
+            raw_weights.append(max(0.0, weight))
+        weight_sum = float(sum(raw_weights))
+        if weight_sum > 1e-9:
+            probs = np.array(raw_weights, dtype=np.float64) / weight_sum
+            choice_idx = int(rng.choice(len(allowed), p=probs))
+            return int(allowed[choice_idx])
+
+    # Fallback: uniform among allowed indices.
+    choice_idx = int(rng.integers(0, len(allowed)))
+    return int(allowed[choice_idx])
+
+
+def _sample_initial_pedestrian_route(
+    scenario: Scenario,
+    rng: np.random.Generator,
+    goal_region_indices: list[int] | None = None,
+) -> tuple[tuple[float, float], tuple[float, float]]:
+    spawn_region_idx = int(rng.integers(0, len(scenario.pedestrian_spawn_regions)))
+    spawn_region = scenario.pedestrian_spawn_regions[spawn_region_idx]
+    goal_region_idx = _sample_initial_goal_region_index(
+        scenario,
+        rng,
+        spawn_region_idx,
+        goal_region_indices,
+    )
+    goal_region = scenario.pedestrian_goal_regions[goal_region_idx]
+
+    spawn = random_point_in_region(
+        spawn_region,
+        rng,
+        obstacles=scenario.obstacles,
+    )
+    goal = random_point_in_region(
+        goal_region,
+        rng,
+        obstacles=scenario.obstacles,
+    )
+    return spawn, goal
+
+
+def _apply_initial_non_group_profile(
+    ped: Pedestrian,
+    scenario_id: str,
+    rng: np.random.Generator,
+) -> None:
+    lo, hi = _INITIAL_SPEED_SCALE_BY_SCENARIO.get(scenario_id, (0.86, 1.14))
+    speed_scale = float(rng.uniform(lo, hi))
+    ped.desired_speed *= speed_scale
+    ped.max_speed = max(ped.desired_speed + 0.4, ped.max_speed * speed_scale)
+    ped.relaxation_time *= float(rng.uniform(0.90, 1.16))
+
+
+def _seed_initial_velocity(
+    ped: Pedestrian,
+    scenario_id: str,
+    rng: np.random.Generator,
+) -> None:
+    tx, ty = ped.get_steering_target()
+    dx = tx - ped.x
+    dy = ty - ped.y
+    dist = float(np.hypot(dx, dy))
+    if dist < 1e-6:
+        ped.vx = 0.0
+        ped.vy = 0.0
+        return
+
+    base_heading = float(np.arctan2(dy, dx))
+    jitter = _INITIAL_HEADING_JITTER_BY_SCENARIO.get(scenario_id, 0.16)
+    heading = base_heading + float(rng.uniform(-jitter, jitter))
+    lo, hi = _INITIAL_SPEED_FRACTION_BY_SCENARIO.get(scenario_id, (0.20, 0.45))
+    speed_fraction = float(rng.uniform(lo, hi))
+    speed = ped.desired_speed_step() * speed_fraction
+    ped.vx = float(np.cos(heading) * speed)
+    ped.vy = float(np.sin(heading) * speed)
+
+
 def _clamp_world_point(x: float, y: float, padding: int = 14) -> tuple[float, float]:
     return (
         float(max(padding, min(WIDTH - padding, x))),
@@ -501,6 +636,7 @@ def _generate_family_groups(
             ped.desired_speed = float(spec.get("desired_speed", ped.desired_speed))
             ped.max_speed = float(spec.get("max_speed", ped.max_speed))
             ped.set_goal(gx, gy, nav_grid=nav_grid, rng=rng)
+            _seed_initial_velocity(ped, scenario.scenario_id, rng)
             pedestrians.append(ped)
 
         next_group_id += 1
@@ -524,7 +660,7 @@ def generate_pedestrian_population(
         for behavior_spec, behavior_count in zip(template.pedestrian_behaviors, behavior_counts):
             for _ in range(behavior_count):
                 behavior, goal_region_indices = _build_behavior(behavior_spec)
-                (sx, sy), (gx, gy) = random_pedestrian_route(
+                (sx, sy), (gx, gy) = _sample_initial_pedestrian_route(
                     scenario,
                     rng,
                     goal_region_indices,
@@ -539,12 +675,14 @@ def generate_pedestrian_population(
                     behavior=behavior,
                     goal_region_indices=goal_region_indices,
                 )
+                _apply_initial_non_group_profile(ped, scenario.scenario_id, rng)
                 ped.set_goal(gx, gy, nav_grid=nav_grid, rng=rng)
+                _seed_initial_velocity(ped, scenario.scenario_id, rng)
                 pedestrians.append(ped)
         return pedestrians
 
     for _ in range(count):
-        (sx, sy), (gx, gy) = random_pedestrian_route(scenario, rng)
+        (sx, sy), (gx, gy) = _sample_initial_pedestrian_route(scenario, rng)
         ped = Pedestrian(
             x=sx,
             y=sy,
@@ -553,7 +691,9 @@ def generate_pedestrian_population(
             goal_x=gx,
             goal_y=gy,
         )
+        _apply_initial_non_group_profile(ped, scenario.scenario_id, rng)
         ped.set_goal(gx, gy, nav_grid=nav_grid, rng=rng)
+        _seed_initial_velocity(ped, scenario.scenario_id, rng)
         pedestrians.append(ped)
     return pedestrians
 

@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 import pygame
 
-from constants import HEIGHT, WIDTH
+from constants import HEIGHT, WIDTH, speed_mps_to_px_per_step
 
 ROBOT_COLOR = (45, 90, 255)
 
@@ -9,7 +9,7 @@ ROBOT_COLOR = (45, 90, 255)
 class Robot:
     x: float = 80.0
     y: float =  80.0
-    speed: float = 3.0
+    speed: float = speed_mps_to_px_per_step(3.0)
     radius: int = 12
 
     def draw(self, surface: pygame.Surface) -> None:

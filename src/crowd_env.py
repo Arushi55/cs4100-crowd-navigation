@@ -6,7 +6,7 @@ import gymnasium as gym
 import numpy as np
 import pygame
 
-from constants import HEIGHT, WIDTH
+from constants import HEIGHT, WIDTH, SIM_FPS
 from environment.pedestrian import Pedestrian
 from environment.robot import Robot
 from environment.pathfinding import NavGrid
@@ -16,8 +16,10 @@ from environment.scenarios import (
     build_scenario,
     generate_pedestrian_population,
     load_scenario_templates,
-    respawn_family_group_members,
-    random_pedestrian_route,
+)
+from environment.pedestrian_lifecycle import (
+    reassign_reached_goals as reassign_pedestrian_goals,
+    select_flow_pedestrians,
 )
 
 from agent.sensor import RaySensor, draw_rays
@@ -136,6 +138,10 @@ class CrowdNavEnv(gym.Env):
         self._last_move = np.zeros(2, dtype=np.float32)
         self._last_actual_move = np.zeros(2, dtype=np.float32)
         self._last_turn_penalty = 0.0
+        self._quit_requested = False
+        self._ped_goal_dwell_frames: dict[int, int] = {}
+        self._ped_pending_perimeter_respawn: set[int] = set()
+        self._flow_pedestrian_ids: set[int] = set()
 
         self.screen = None
         self.clock = None
@@ -154,6 +160,11 @@ class CrowdNavEnv(gym.Env):
             y=self.scenario.robot_start[1],
         )
         self.pedestrians = self._generate_pedestrians()
+        self._flow_pedestrian_ids = select_flow_pedestrians(
+            self.pedestrians,
+            self.scenario_id,
+            self.rng,
+        )
         self.goal_pos = self.scenario.robot_goal
         self.current_step = 0
         self._prev_dist_to_goal = np.hypot(
@@ -169,6 +180,9 @@ class CrowdNavEnv(gym.Env):
         self._last_move = np.zeros(2, dtype=np.float32)
         self._last_actual_move = np.zeros(2, dtype=np.float32)
         self._last_turn_penalty = 0.0
+        self._quit_requested = False
+        self._ped_goal_dwell_frames.clear()
+        self._ped_pending_perimeter_respawn.clear()
         
         observation = self._get_observation()
         info = {}
@@ -178,6 +192,20 @@ class CrowdNavEnv(gym.Env):
     def step(self, action: int):
         assert self.robot is not None
         assert self.scenario is not None
+
+        if self._quit_requested:
+            observation = self._get_observation()
+            info = {
+                "distance_to_goal": float(np.hypot(
+                    self.robot.x - self.goal_pos[0],
+                    self.robot.y - self.goal_pos[1],
+                )),
+                "steps": self.current_step,
+                "collisions": self._count_collisions(),
+                "is_success": False,
+                "user_quit": True,
+            }
+            return observation, 0.0, False, True, info
         
         self.current_step += 1
         
@@ -204,6 +232,12 @@ class CrowdNavEnv(gym.Env):
             self._last_turn_penalty = 0.0
         
         for ped in self.pedestrians:
+            pid = id(ped)
+            if self._ped_goal_dwell_frames.get(pid, 0) > 0:
+                # Hold briefly at destination before choosing the next activity.
+                ped.vx *= 0.5
+                ped.vy *= 0.5
+                continue
             ped.update(self.pedestrians, self.scenario.obstacles, rng=self.rng)
         self._reassign_reached_goals()
         
@@ -261,20 +295,17 @@ class CrowdNavEnv(gym.Env):
         )
 
     def _reassign_reached_goals(self):
-        respawned_groups: set[int] = set()
-        for ped in self.pedestrians:
-            if ped.has_reached_goal():
-                if ped.group_id is not None and ped.group_id not in respawned_groups:
-                    group_members = [
-                        member for member in self.pedestrians if member.group_id == ped.group_id
-                    ]
-                    respawn_family_group_members(group_members, self.scenario, self.nav_grid, self.rng)
-                    respawned_groups.add(ped.group_id)
-                    continue
-                (sx, sy), (gx, gy) = random_pedestrian_route(self.scenario, self.rng)
-                ped.x, ped.y = sx, sy
-                ped.vx, ped.vy = 0.0, 0.0
-                ped.set_goal(gx, gy, nav_grid=self.nav_grid, rng=self.rng)
+        reassign_pedestrian_goals(
+            pedestrians=self.pedestrians,
+            scenario=self.scenario,
+            nav_grid=self.nav_grid,
+            rng=self.rng,
+            scenario_id=self.scenario_id,
+            goal_dwell_frames=self._ped_goal_dwell_frames,
+            pending_perimeter_respawn=self._ped_pending_perimeter_respawn,
+            flow_pedestrian_ids=self._flow_pedestrian_ids,
+            sim_fps=SIM_FPS,
+        )
 
     def _get_observation(self) -> np.ndarray:
         ray_obs = self.ray_sensor.cast_rays_flat(
@@ -458,7 +489,7 @@ class CrowdNavEnv(gym.Env):
         if dist >= self.slowdown_penalty_radius:
             return 0.0
 
-        desired_speed = max(0.2, ped.desired_speed)
+        desired_speed = max(0.2, ped.desired_speed_step())
         current_speed = np.hypot(ped.vx, ped.vy)
         slowdown = max(0.0, 1.0 - (current_speed / desired_speed))
         if slowdown <= 0.0:
@@ -495,7 +526,7 @@ class CrowdNavEnv(gym.Env):
                     -blocking_penalty / abs(self.blocking_penalty_scale),
                 )
 
-            desired_speed = max(0.2, ped.desired_speed)
+            desired_speed = max(0.2, ped.desired_speed_step())
             current_speed = np.hypot(ped.vx, ped.vy)
             slowdown = max(0.0, 1.0 - (current_speed / desired_speed))
             if dist < self.slowdown_penalty_radius:
@@ -620,13 +651,24 @@ class CrowdNavEnv(gym.Env):
             return None
         
         if self.screen is None:
-            pygame.init()
+            if not pygame.display.get_init():
+                pygame.display.init()
             if self.render_mode == "human":
                 pygame.display.set_caption("Crowd Navigation")
                 self.screen = pygame.display.set_mode((WIDTH, HEIGHT))
             else:
                 self.screen = pygame.Surface((WIDTH, HEIGHT))
             self.clock = pygame.time.Clock()
+
+        if self.render_mode == "human":
+            for event in pygame.event.get():
+                if event.type == pygame.QUIT:
+                    self._quit_requested = True
+                elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
+                    self._quit_requested = True
+            if self._quit_requested:
+                self.close()
+                return None
         
         # colors
         bg_color = (245, 247, 240)
