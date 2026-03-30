@@ -32,14 +32,56 @@ def run_benchmark(
     if speed_multipliers is None:
         speed_multipliers = [1.0, 1.5, 2.0, 3.0]
 
-    model_type, frame_stack = load_model_config(Path(model_path))
-    model = ALGORITHMS[model_type].load(model_path)
+    model_path_obj = Path(model_path)
+    model_type, frame_stack = load_model_config(model_path_obj)
+    is_torch_dqn_checkpoint = model_path_obj.suffix == ".pt"
+
+    if is_torch_dqn_checkpoint:
+        try:
+            import torch
+            from dqn import QNetwork
+        except Exception as exc:
+            print(f"Could not load PyTorch DQN dependencies: {exc}")
+            print("Install src/requirements.txt and retry.")
+            return
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        tmp_env = CrowdNavEnv(
+            scenario_id=scenario,
+            num_pedestrians=ped_counts[0] if ped_counts else 8,
+            max_steps=max_steps,
+            seed=seed,
+            render_mode=None,
+        )
+        if frame_stack > 1:
+            tmp_env = ObservationStackWrapper(tmp_env, stack_size=frame_stack)
+        obs_dim = int(np.prod(tmp_env.observation_space.shape))
+        action_dim = tmp_env.action_space.n
+        tmp_env.close()
+
+        checkpoint = torch.load(model_path_obj, map_location=device)
+        q_net = QNetwork(obs_dim, action_dim).to(device)
+        q_net.load_state_dict(checkpoint["q_net"])
+        q_net.eval()
+
+        def action_fn(obs: np.ndarray) -> int:
+            obs_t = torch.as_tensor(obs, device=device, dtype=torch.float32).unsqueeze(0)
+            return int(torch.argmax(q_net(obs_t), dim=1).item())
+    else:
+        model = ALGORITHMS[model_type].load(model_path)
+
+        def action_fn(obs: np.ndarray) -> int:
+            action, _ = model.predict(obs, deterministic=True)
+            return int(action)
 
     print("=" * 80)
     print("  Crowd Navigation — Scalability Benchmark")
     print("=" * 80)
     print(f"  Model:    {model_path}")
-    print(f"  Algo:     {model_type.upper()}  |  Frame stack: {frame_stack}")
+    if is_torch_dqn_checkpoint:
+        print(f"  Algo:     DQN (PyTorch)  |  Frame stack: {frame_stack}")
+    else:
+        print(f"  Algo:     {model_type.upper()}  |  Frame stack: {frame_stack}")
     print(f"  Scenario: {scenario}  |  Episodes per config: {episodes}")
     print(f"  Max steps: {max_steps}")
     print("=" * 80)
@@ -56,7 +98,7 @@ def run_benchmark(
 
     count_results = []
     for n_peds in ped_counts:
-        stats = _evaluate(model, scenario, n_peds, 1.0, episodes, max_steps, seed, frame_stack)
+        stats = _evaluate(action_fn, scenario, n_peds, 1.0, episodes, max_steps, seed, frame_stack)
         count_results.append((n_peds, stats))
         print(
             f"  {n_peds:>6d} | {stats['success_rate']:>7.0f}% | "
@@ -77,7 +119,7 @@ def run_benchmark(
 
     speed_results = []
     for speed_mult in speed_multipliers:
-        stats = _evaluate(model, scenario, 8, speed_mult, episodes, max_steps, seed, frame_stack)
+        stats = _evaluate(action_fn, scenario, 8, speed_mult, episodes, max_steps, seed, frame_stack)
         speed_results.append((speed_mult, stats))
         print(
             f"  {speed_mult:>5.1f}× | {stats['success_rate']:>7.0f}% | "
@@ -104,7 +146,7 @@ def run_benchmark(
     print(f"  {'─'*6}-{'─'*6}-+-{'─'*8}-+-{'─'*10}-+-{'─'*11}-+-{'─'*10}-+-{'─'*8}-+-{'─'*8}")
 
     for n_peds, speed_mult in stress_configs:
-        stats = _evaluate(model, scenario, n_peds, speed_mult, episodes, max_steps, seed, frame_stack)
+        stats = _evaluate(action_fn, scenario, n_peds, speed_mult, episodes, max_steps, seed, frame_stack)
         print(
             f"  {n_peds:>6d} {speed_mult:>5.1f}× | {stats['success_rate']:>7.0f}% | "
             f"{stats['avg_steps']:>10.0f} | {stats['avg_reward']:>11.1f} | "
@@ -130,7 +172,7 @@ def load_model_config(model_path: Path) -> tuple[str, int]:
 
 
 def _evaluate(
-    model,
+    action_fn,
     scenario: str,
     n_peds: int,
     speed_mult: float,
@@ -171,8 +213,8 @@ def _evaluate(
         done = False
 
         while not done:
-            action, _ = model.predict(obs, deterministic=True)
-            obs, reward, terminated, truncated, info = env.step(int(action))
+            action = action_fn(obs)
+            obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
             total_collisions += info.get("collisions", 0)
             total_near_misses += info.get("near_misses", 0)

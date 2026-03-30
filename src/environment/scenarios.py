@@ -473,6 +473,21 @@ def _sample_edge_point(
     raise ValueError(f"Unsupported edge '{edge}'")
 
 
+def _sample_edge_point_safe(
+    edge: str,
+    rng: np.random.Generator,
+    obstacles: list[pygame.Rect] | None,
+    padding: int = 18,
+    clearance_radius: int = 10,
+    max_attempts: int = 40,
+) -> tuple[float, float]:
+    for _ in range(max_attempts):
+        x, y = _sample_edge_point(edge, rng, padding=padding)
+        if not _point_hits_obstacles(x, y, obstacles, clearance_radius):
+            return x, y
+    return _sample_edge_point(edge, rng, padding=padding)
+
+
 def _sample_group_member_positions(
     anchor: tuple[float, float],
     size: int,
@@ -711,37 +726,66 @@ def respawn_family_group_members(
     if template_member.spawn_edge is None or template_member.goal_edge is None:
         return
 
-    spawn_anchor = _sample_edge_point(template_member.spawn_edge, rng)
-    goal_anchor = _sample_edge_point(template_member.goal_edge, rng)
+    obstacle_list = scenario.obstacles
+    spawn_anchor = _sample_edge_point_safe(template_member.spawn_edge, rng, obstacle_list)
+    goal_anchor = _sample_edge_point_safe(template_member.goal_edge, rng, obstacle_list)
     positions = _sample_group_member_positions(
         spawn_anchor,
         len(members),
         rng,
         spread=template_member.group_spawn_spread,
-        obstacles=scenario.obstacles,
+        obstacles=obstacle_list,
     )
-    raw_goal = _clamp_world_point(
-        goal_anchor[0] + float(
-            rng.uniform(-template_member.group_goal_spread, template_member.group_goal_spread)
-        ),
-        goal_anchor[1] + float(
-            rng.uniform(-template_member.group_goal_spread, template_member.group_goal_spread)
-        ),
-    )
-    goal_region = pygame.Rect(
-        int(max(0, raw_goal[0] - template_member.group_goal_spread)),
-        int(max(0, raw_goal[1] - template_member.group_goal_spread)),
-        int(template_member.group_goal_spread * 2),
-        int(template_member.group_goal_spread * 2),
-    )
-    group_goal = random_point_in_region(
-        goal_region,
-        rng,
-        margin=0,
-        obstacles=scenario.obstacles,
-    )
+    group_goal: tuple[float, float] | None = None
+    for _ in range(40):
+        candidate_goal = _clamp_world_point(
+            goal_anchor[0] + float(
+                rng.uniform(-template_member.group_goal_spread, template_member.group_goal_spread)
+            ),
+            goal_anchor[1] + float(
+                rng.uniform(-template_member.group_goal_spread, template_member.group_goal_spread)
+            ),
+        )
+        if not _point_hits_obstacles(candidate_goal[0], candidate_goal[1], obstacle_list, 10):
+            group_goal = candidate_goal
+            break
+    if group_goal is None:
+        raw_goal = _clamp_world_point(goal_anchor[0], goal_anchor[1])
+        goal_region = pygame.Rect(
+            int(max(0, raw_goal[0] - template_member.group_goal_spread)),
+            int(max(0, raw_goal[1] - template_member.group_goal_spread)),
+            int(template_member.group_goal_spread * 2),
+            int(template_member.group_goal_spread * 2),
+        )
+        group_goal = random_point_in_region(
+            goal_region,
+            rng,
+            margin=0,
+            obstacles=obstacle_list,
+        )
 
     for ped, (sx, sy) in zip(members, positions):
+        if _point_hits_obstacles(sx, sy, obstacle_list, ped.radius):
+            safe_pos: tuple[float, float] | None = None
+            for _ in range(40):
+                cx, cy = _clamp_world_point(
+                    spawn_anchor[0] + float(
+                        rng.uniform(-template_member.group_spawn_spread, template_member.group_spawn_spread)
+                    ),
+                    spawn_anchor[1] + float(
+                        rng.uniform(-template_member.group_spawn_spread, template_member.group_spawn_spread)
+                    ),
+                )
+                if not _point_hits_obstacles(cx, cy, obstacle_list, ped.radius):
+                    safe_pos = (cx, cy)
+                    break
+            if safe_pos is None:
+                spawn_region = scenario.pedestrian_spawn_regions[
+                    int(rng.integers(0, len(scenario.pedestrian_spawn_regions)))
+                ]
+                safe_pos = random_point_in_region(spawn_region, rng, obstacles=obstacle_list)
+            sx, sy = safe_pos
+
         gx, gy = group_goal
         ped.x = sx
         ped.y = sy

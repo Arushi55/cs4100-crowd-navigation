@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-import time
 from pathlib import Path
 
 import numpy as np
@@ -79,25 +78,28 @@ def main() -> None:
             print(f"  Train a model first:  python src/train.py")
             sys.exit(1)
 
+    run_config = load_run_config(model_path)
+    frame_stack = args.frame_stack or int(run_config.get("frame_stack", 1))
+    is_torch_dqn_checkpoint = model_path.suffix == ".pt"
+    algo_name = args.algo or run_config.get("algo", "dqn")
+    model = None
+    q_net = None
+    device = None
+
     print("=" * 60)
     print("  Crowd Navigation — Agent Evaluation")
     print("=" * 60)
-    run_config = load_run_config(model_path)
-    algo_name = args.algo or run_config.get("algo", "dqn")
-    frame_stack = args.frame_stack or int(run_config.get("frame_stack", 1))
-    model_cls = ALGORITHMS[algo_name]
-
     print(f"  Model:       {model_path}")
-    print(f"  Algorithm:   {algo_name.upper()}")
+    if is_torch_dqn_checkpoint:
+        print("  Algorithm:   DQN (PyTorch)")
+    else:
+        print(f"  Algorithm:   {algo_name.upper()}")
     print(f"  Frame stack: {frame_stack}")
     print(f"  Scenario:    {args.scenario}")
     print(f"  Pedestrians: {args.pedestrians}")
     print(f"  Episodes:    {args.episodes}")
     print(f"  Render:      {not args.no_render}")
     print("=" * 60)
-
-    # Load model
-    model = model_cls.load(str(model_path))
 
     # Create environment
     render_mode = None if args.no_render else "human"
@@ -113,6 +115,33 @@ def main() -> None:
 
     # Patch render FPS
     env.metadata["render_fps"] = args.fps
+
+    # Load model
+    if is_torch_dqn_checkpoint:
+        try:
+            import torch
+            from dqn import QNetwork
+        except Exception as exc:
+            env.close()
+            print(f"  Error loading PyTorch DQN dependencies: {exc}")
+            print("  Install dependencies from src/requirements.txt and retry.")
+            sys.exit(1)
+
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        obs_dim = int(np.prod(env.observation_space.shape))
+        action_dim = env.action_space.n
+        checkpoint = torch.load(model_path, map_location=device)
+        q_net = QNetwork(obs_dim, action_dim).to(device)
+        q_net.load_state_dict(checkpoint["q_net"])
+        q_net.eval()
+    else:
+        model_cls = ALGORITHMS.get(algo_name)
+        if model_cls is None:
+            env.close()
+            print(f"  Error: unsupported algorithm '{algo_name}'.")
+            print(f"  Supported: {', '.join(sorted(ALGORITHMS.keys()))}")
+            sys.exit(1)
+        model = model_cls.load(str(model_path))
 
     # Run evaluation episodes
     episode_rewards = []
@@ -136,8 +165,15 @@ def main() -> None:
         step = 0
 
         while not done:
-            action, _ = model.predict(obs, deterministic=args.deterministic)
-            obs, reward, terminated, truncated, info = env.step(int(action))
+            if is_torch_dqn_checkpoint:
+                assert q_net is not None and device is not None
+                obs_t = torch.as_tensor(obs, device=device, dtype=torch.float32).unsqueeze(0)
+                action = int(torch.argmax(q_net(obs_t), dim=1).item())
+            else:
+                assert model is not None
+                action, _ = model.predict(obs, deterministic=args.deterministic)
+                action = int(action)
+            obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
             total_collisions += info.get("collisions", 0)
             total_near_misses += info.get("near_misses", 0)

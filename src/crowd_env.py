@@ -666,6 +666,7 @@ class CrowdNavEnv(gym.Env):
                     self._quit_requested = True
                 elif event.type == pygame.KEYDOWN and event.key in (pygame.K_ESCAPE, pygame.K_q):
                     self._quit_requested = True
+            pygame.event.pump()
             if self._quit_requested:
                 self.close()
                 return None
