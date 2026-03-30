@@ -73,25 +73,17 @@ This is the best starting point for the current repo:
 
 ```bash
 python src/train.py \
-  --algo ppo \
   --scenario airport \
   --vary-pedestrians \
-  --pedestrians-min 16 \
-  --pedestrians-max 30 \
-  --ped-speed-min 0.95 \
-  --ped-speed-max 1.15 \
+  --pedestrians-min 12 --pedestrians-max 24 \
+  --ped-speed-min 0.95 --ped-speed-max 1.15 \
   --frame-stack 4 \
-  --num-envs 4 \
-  --total-timesteps 120000 \
-  --max-episode-steps 1000 \
-  --learning-rate 3e-4 \
+  --total-steps 200000 \
+  --buffer-size 200000 \
   --batch-size 256 \
-  --n-steps 1024 \
-  --gamma 0.995 \
-  --ent-coef 0.01 \
-  --eval-freq 10000 \
-  --checkpoint-freq 25000 \
-  --output-dir training_output/airport_ppo_run
+  --learning-rate 3e-4 \
+  --target-update 2000 \
+  --output-dir training_output/manual_dqn
 ```
 
 ### What the training script saves
@@ -112,7 +104,6 @@ To continue from an existing checkpoint:
 
 ```bash
 python src/train.py \
-  --algo ppo \
   --scenario airport \
   --vary-pedestrians \
   --pedestrians-min 16 \
@@ -128,9 +119,6 @@ python src/train.py \
 
 These are the ones the team will probably tweak most often:
 
-- `--algo`
-  - `ppo` is the default and the recommended option now
-  - `dqn` still works, but is generally weaker on the current dynamic crowd setup
 - `--scenario`
   - choose the map to train on
 - `--pedestrians`
@@ -180,7 +168,7 @@ There are three main training modes in `src/train.py`.
 ### 1. Fixed single-scenario training
 
 ```bash
-python src/train.py --algo ppo --scenario airport --pedestrians 24
+python src/train.py --scenario airport --pedestrians 24
 ```
 
 Use this when you want one fixed density.
@@ -189,7 +177,6 @@ Use this when you want one fixed density.
 
 ```bash
 python src/train.py \
-  --algo ppo \
   --scenario airport \
   --vary-pedestrians \
   --pedestrians-min 16 \
@@ -201,7 +188,7 @@ Use this when you want one map but different crowd sizes each episode. This is t
 ### 3. Multi-scenario curriculum-style training
 
 ```bash
-python src/train.py --algo ppo --multi-scenario
+python src/train.py --multi-scenario
 ```
 
 This samples across `airport`, `home`, and `shopping_center`, along with random crowd count and speed.
@@ -217,24 +204,13 @@ python src/evaluate.py --model training_output/airport_ppo_run/best_model/best_m
 ### Batch evaluation
 
 ```bash
-python src/evaluate.py \
-  --model training_output/airport_ppo_run/best_model/best_model.zip \
-  --scenario airport \
-  --pedestrians 30 \
-  --episodes 10 \
-  --max-steps 1000 \
-  --no-render
+python src/evaluate.py --model training_output/dqn/dqn.pt --scenario airport --episodes 10 --fps 20 --no-render
 ```
 
 ### Visual evaluation
 
 ```bash
-python src/evaluate.py \
-  --model training_output/airport_ppo_run/best_model/best_model.zip \
-  --scenario airport \
-  --pedestrians 30 \
-  --episodes 5 \
-  --fps 20
+python src/evaluate.py --model training_output/dqn/dqn.pt --scenario airport --episodes 10 --fps 20
 ```
 
 `evaluate.py` automatically reads `run_config.json` when possible, so it can recover the right algorithm and frame-stack settings from the saved run.
@@ -255,7 +231,7 @@ Reported metrics include:
 For a broader sweep across pedestrian counts and speeds:
 
 ```bash
-python src/benchmark.py training_output/airport_ppo_run/best_model/best_model.zip
+python src/benchmark.py training_output/dqn/best_model/best_model.zip
 ```
 
 This prints summary tables for:
