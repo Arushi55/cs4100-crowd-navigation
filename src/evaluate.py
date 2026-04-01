@@ -75,7 +75,19 @@ def main() -> None:
     action_dim = env.action_space.n
 
     ckpt = torch.load(model_path, map_location=device)
-    q_net = QNetwork(obs_dim, action_dim).to(device)
+    dueling = bool(run_config.get("dueling_dqn", False))
+    hidden_sizes = run_config.get("hidden_sizes", "256,256")
+    hidden_sizes = tuple(int(x) for x in hidden_sizes.split(",") if x.strip())
+    activation = run_config.get("hidden_activation", "relu")
+
+    q_net = QNetwork(
+        obs_dim,
+        action_dim,
+        hidden_sizes=hidden_sizes,
+        activation=activation,
+        dueling=dueling,
+    ).to(device)
+
     q_net.load_state_dict(ckpt["q_net"])
     q_net.eval()
 
