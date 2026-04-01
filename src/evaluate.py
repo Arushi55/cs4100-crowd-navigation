@@ -21,28 +21,38 @@ ALGORITHMS = {
 
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Evaluate a trained crowd navigation agent")
-    p.add_argument("--model", type=str, default=None,
-                    help="Path to model .zip (default: training_output/best_model/best_model.zip)")
-    p.add_argument("--algo", type=str, choices=sorted(ALGORITHMS), default=None,
-                    help="Algorithm used to train the model (auto-detected when possible)")
-    p.add_argument("--frame-stack", type=int, default=None,
-                    help="Observation stack size used during training (auto-detected when possible)")
-    p.add_argument("--scenario", type=str, default="airport",
-                    help="Scenario id")
-    p.add_argument("--pedestrians", type=int, default=8,
-                    help="Number of pedestrians")
-    p.add_argument("--episodes", type=int, default=10,
-                    help="Number of episodes to run")
-    p.add_argument("--max-steps", type=int, default=1000,
-                    help="Max steps per episode")
-    p.add_argument("--seed", type=int, default=123,
-                    help="Random seed")
-    p.add_argument("--deterministic", action="store_true", default=True,
-                    help="Use deterministic actions (no exploration)")
-    p.add_argument("--no-render", action="store_true",
-                    help="Disable rendering (for batch evaluation)")
-    p.add_argument("--fps", type=int, default=30,
-                    help="Rendering FPS (lower = easier to watch)")
+    p.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Path to model checkpoint (.zip for SB3, .pt for PyTorch DQN)",
+    )
+    p.add_argument(
+        "--algo",
+        type=str,
+        choices=sorted(ALGORITHMS),
+        default=None,
+        help="Algorithm used to train the SB3 model (auto-detected when possible)",
+    )
+    p.add_argument(
+        "--frame-stack",
+        type=int,
+        default=None,
+        help="Observation stack size used during training (auto-detected when possible)",
+    )
+    p.add_argument("--scenario", type=str, default=None, help="Scenario id")
+    p.add_argument("--pedestrians", type=int, default=None, help="Number of pedestrians")
+    p.add_argument("--episodes", type=int, default=10, help="Number of episodes to run")
+    p.add_argument("--max-steps", type=int, default=None, help="Max steps per episode")
+    p.add_argument("--seed", type=int, default=123, help="Random seed")
+    p.add_argument(
+        "--deterministic",
+        action="store_true",
+        default=True,
+        help="Use deterministic actions for SB3 models",
+    )
+    p.add_argument("--no-render", action="store_true", help="Disable rendering (for batch evaluation)")
+    p.add_argument("--fps", type=int, default=30, help="Rendering FPS (lower = easier to watch)")
     return p.parse_args()
 
 
@@ -57,34 +67,51 @@ def load_run_config(model_path: Path) -> dict:
     return {}
 
 
+def _parse_hidden_sizes(raw: object, default: tuple[int, ...] = (256, 256)) -> tuple[int, ...]:
+    if isinstance(raw, str):
+        values = [x.strip() for x in raw.split(",") if x.strip()]
+        if not values:
+            return default
+        return tuple(int(x) for x in values)
+    if isinstance(raw, (list, tuple)):
+        values = [int(x) for x in raw]
+        return tuple(values) if values else default
+    return default
+
+
 def main() -> None:
     args = parse_args()
 
     repo_root = Path(__file__).resolve().parent.parent
 
-    # Resolve model path
     if args.model:
         model_path = Path(args.model)
     else:
         model_path = repo_root / "training_output" / "best_model" / "best_model.zip"
 
     if not model_path.exists():
-        # Try without .zip
-        alt = model_path.with_suffix("")
-        if alt.with_suffix(".zip").exists():
-            model_path = alt.with_suffix(".zip")
+        alt_zip = model_path.with_suffix(".zip")
+        alt_pt = model_path.with_suffix(".pt")
+        if alt_zip.exists():
+            model_path = alt_zip
+        elif alt_pt.exists():
+            model_path = alt_pt
         else:
             print(f"  Error: Model not found at {model_path}")
-            print(f"  Train a model first:  python src/train.py")
+            print("  Train a model first:  python src/train.py  or  python src/dqn.py")
             sys.exit(1)
 
     run_config = load_run_config(model_path)
-    frame_stack = args.frame_stack or int(run_config.get("frame_stack", 1))
+
+    frame_stack = args.frame_stack if args.frame_stack is not None else int(run_config.get("frame_stack", 1))
+    scenario = args.scenario or run_config.get("scenario", "airport")
+    pedestrians = args.pedestrians if args.pedestrians is not None else int(run_config.get("pedestrians", 12))
+    max_steps = args.max_steps if args.max_steps is not None else int(
+        run_config.get("max_steps", run_config.get("max_episode_steps", 1000))
+    )
+
     is_torch_dqn_checkpoint = model_path.suffix == ".pt"
     algo_name = args.algo or run_config.get("algo", "dqn")
-    model = None
-    q_net = None
-    device = None
 
     print("=" * 60)
     print("  Crowd Navigation — Agent Evaluation")
@@ -95,28 +122,28 @@ def main() -> None:
     else:
         print(f"  Algorithm:   {algo_name.upper()}")
     print(f"  Frame stack: {frame_stack}")
-    print(f"  Scenario:    {args.scenario}")
-    print(f"  Pedestrians: {args.pedestrians}")
+    print(f"  Scenario:    {scenario}")
+    print(f"  Pedestrians: {pedestrians}")
     print(f"  Episodes:    {args.episodes}")
     print(f"  Render:      {not args.no_render}")
     print("=" * 60)
 
-    # Create environment
     render_mode = None if args.no_render else "human"
     env = CrowdNavEnv(
-        scenario_id=args.scenario,
-        num_pedestrians=args.pedestrians,
-        max_steps=args.max_steps,
+        scenario_id=scenario,
+        num_pedestrians=pedestrians,
+        max_steps=max_steps,
         seed=args.seed,
         render_mode=render_mode,
     )
     if frame_stack > 1:
         env = ObservationStackWrapper(env, stack_size=frame_stack)
-
-    # Patch render FPS
     env.metadata["render_fps"] = args.fps
 
-    # Load model
+    model = None
+    q_net = None
+    device = None
+
     if is_torch_dqn_checkpoint:
         try:
             import torch
@@ -131,7 +158,18 @@ def main() -> None:
         obs_dim = int(np.prod(env.observation_space.shape))
         action_dim = env.action_space.n
         checkpoint = torch.load(model_path, map_location=device)
-        q_net = QNetwork(obs_dim, action_dim).to(device)
+
+        hidden_sizes = _parse_hidden_sizes(run_config.get("hidden_sizes", "256,256"))
+        activation = str(run_config.get("hidden_activation", "relu"))
+        dueling = bool(run_config.get("dueling_dqn", False))
+
+        q_net = QNetwork(
+            obs_dim,
+            action_dim,
+            hidden_sizes=hidden_sizes,
+            activation=activation,
+            dueling=dueling,
+        ).to(device)
         q_net.load_state_dict(checkpoint["q_net"])
         q_net.eval()
     else:
@@ -143,7 +181,6 @@ def main() -> None:
             sys.exit(1)
         model = model_cls.load(str(model_path))
 
-    # Run evaluation episodes
     episode_rewards = []
     episode_lengths = []
     episode_successes = []
@@ -166,13 +203,12 @@ def main() -> None:
 
         while not done:
             if is_torch_dqn_checkpoint:
-                assert q_net is not None and device is not None
                 obs_t = torch.as_tensor(obs, device=device, dtype=torch.float32).unsqueeze(0)
                 action = int(torch.argmax(q_net(obs_t), dim=1).item())
             else:
-                assert model is not None
                 action, _ = model.predict(obs, deterministic=args.deterministic)
                 action = int(action)
+
             obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
             total_collisions += info.get("collisions", 0)
@@ -186,7 +222,7 @@ def main() -> None:
             if render_mode:
                 env.render()
 
-        success = terminated  # reached goal
+        success = terminated
         episode_rewards.append(total_reward)
         episode_lengths.append(step)
         episode_successes.append(success)
@@ -210,7 +246,6 @@ def main() -> None:
 
     env.close()
 
-    # Summary
     print("\n" + "=" * 60)
     print("  Evaluation Summary")
     print("=" * 60)

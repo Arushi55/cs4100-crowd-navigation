@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import collections
 import os
 import random
 import json
@@ -24,7 +25,16 @@ from wrappers import ObservationStackWrapper
 # Replay buffer
 # ---------------------------------------------------------------------------
 class ReplayBuffer:
-    def __init__(self, capacity: int, obs_dim: int, device: torch.device):
+    def __init__(
+        self,
+        capacity: int,
+        obs_dim: int,
+        device: torch.device,
+        prioritized: bool = False,
+        alpha: float = 0.6,
+        n_step: int = 1,
+        gamma: float = 0.99,
+    ):
         self.capacity = capacity
         self.device = device
         self.obs = np.zeros((capacity, obs_dim), dtype=np.float32)
@@ -32,15 +42,64 @@ class ReplayBuffer:
         self.actions = np.zeros((capacity,), dtype=np.int64)
         self.rewards = np.zeros((capacity,), dtype=np.float32)
         self.dones = np.zeros((capacity,), dtype=np.float32)
+
+        self.prioritized = prioritized
+        self.alpha = alpha
+        self.epsilon = 1e-6
+        self.priorities = np.zeros((capacity,), dtype=np.float32) if prioritized else None
+
+        self.n_step = n_step
+        self.gamma = gamma
+        self.n_step_buffer: collections.deque = collections.deque(maxlen=n_step)
+
         self.idx = 0
         self.full = False
 
     def add(self, obs: np.ndarray, action: int, reward: float, next_obs: np.ndarray, done: bool) -> None:
+        if self.n_step == 1:
+            self._store(obs, action, reward, next_obs, done)
+            if done:
+                self.n_step_buffer.clear()
+            return
+
+        self.n_step_buffer.append((obs, action, reward, next_obs, done))
+
+        if len(self.n_step_buffer) < self.n_step and not done:
+            return
+
+        # store main n-step contiguous transition
+        self._store_n_step_transition()
+
+        if done:
+            while len(self.n_step_buffer) > 1:
+                self._store_n_step_transition()
+
+    def _store_n_step_transition(self) -> None:
+        if not self.n_step_buffer:
+            return
+
+        reward = 0.0
+        next_obs = self.n_step_buffer[-1][3]
+        done = self.n_step_buffer[-1][4]
+
+        for idx, transition in enumerate(self.n_step_buffer):
+            reward += (self.gamma ** idx) * transition[2]
+
+        first_obs, first_action = self.n_step_buffer[0][0], self.n_step_buffer[0][1]
+        self._store(first_obs, first_action, reward, next_obs, done)
+        self.n_step_buffer.popleft()
+
+    def _store(self, obs: np.ndarray, action: int, reward: float, next_obs: np.ndarray, done: bool) -> None:
         self.obs[self.idx] = obs
         self.next_obs[self.idx] = next_obs
         self.actions[self.idx] = action
         self.rewards[self.idx] = reward
         self.dones[self.idx] = 1.0 if done else 0.0
+
+        if self.prioritized:
+            max_priority = self.priorities.max() if self.full or self.idx > 0 else 1.0
+            self.priorities[self.idx] = max_priority
+
         self.idx = (self.idx + 1) % self.capacity
         if self.idx == 0:
             self.full = True
@@ -48,33 +107,95 @@ class ReplayBuffer:
     def __len__(self) -> int:
         return self.capacity if self.full else self.idx
 
-    def sample(self, batch_size: int) -> Tuple[torch.Tensor, ...]:
+    def sample(self, batch_size: int, beta: float = 0.4):
         max_idx = self.capacity if self.full else self.idx
-        idxs = np.random.randint(0, max_idx, size=batch_size)
+        if max_idx == 0:
+            raise ValueError("Trying to sample from empty buffer")
+
+        if self.prioritized:
+            p = self.priorities[:max_idx] + self.epsilon
+            probs = p ** self.alpha
+            probs /= probs.sum()
+            idxs = np.random.choice(max_idx, size=batch_size, p=probs)
+            weights = (max_idx * probs[idxs]) ** (-beta)
+            weights = weights / weights.max()
+            weights = torch.as_tensor(weights, device=self.device, dtype=torch.float32)
+        else:
+            idxs = np.random.randint(0, max_idx, size=batch_size)
+            weights = torch.ones((batch_size,), device=self.device, dtype=torch.float32)
+
         batch_obs = torch.as_tensor(self.obs[idxs], device=self.device)
         batch_next_obs = torch.as_tensor(self.next_obs[idxs], device=self.device)
         batch_actions = torch.as_tensor(self.actions[idxs], device=self.device)
         batch_rewards = torch.as_tensor(self.rewards[idxs], device=self.device)
         batch_dones = torch.as_tensor(self.dones[idxs], device=self.device)
-        return batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones
+
+        return batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, weights, idxs
+
+    def update_priorities(self, idxs: np.ndarray, priorities: np.ndarray) -> None:
+        if not self.prioritized:
+            return
+        self.priorities[idxs] = priorities
 
 
 # ---------------------------------------------------------------------------
 # Q-network
 # ---------------------------------------------------------------------------
 class QNetwork(nn.Module):
-    def __init__(self, obs_dim: int, action_dim: int):
+    def __init__(
+        self,
+        obs_dim: int,
+        action_dim: int,
+        hidden_sizes: tuple[int, ...] = (256, 256),
+        activation: str = "relu",
+        dueling: bool = False,
+    ):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(obs_dim, 256),
-            nn.ReLU(),
-            nn.Linear(256, 256),
-            nn.ReLU(),
-            nn.Linear(256, action_dim),
-        )
+
+        self.dueling = dueling
+        if not dueling:
+            layers: list[nn.Module] = []
+            last_size = obs_dim
+            for h in hidden_sizes:
+                layers.append(nn.Linear(last_size, h))
+                if activation.lower() == "relu":
+                    layers.append(nn.ReLU())
+                elif activation.lower() == "tanh":
+                    layers.append(nn.Tanh())
+                elif activation.lower() == "leaky_relu":
+                    layers.append(nn.LeakyReLU())
+                else:
+                    raise ValueError(f"Unsupported activation: {activation}")
+                last_size = h
+            layers.append(nn.Linear(last_size, action_dim))
+            self.net = nn.Sequential(*layers)
+        else:
+            fc_layers: list[nn.Module] = []
+            last_size = obs_dim
+            for h in hidden_sizes:
+                fc_layers.append(nn.Linear(last_size, h))
+                if activation.lower() == "relu":
+                    fc_layers.append(nn.ReLU())
+                elif activation.lower() == "tanh":
+                    fc_layers.append(nn.Tanh())
+                elif activation.lower() == "leaky_relu":
+                    fc_layers.append(nn.LeakyReLU())
+                else:
+                    raise ValueError(f"Unsupported activation: {activation}")
+                last_size = h
+            self.feature = nn.Sequential(*fc_layers)
+            self.value_stream = nn.Sequential(nn.Linear(last_size, 1))
+            self.adv_stream = nn.Sequential(nn.Linear(last_size, action_dim))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
-        return self.net(x)
+        if not self.dueling:
+            return self.net(x)
+
+        features = self.feature(x)
+        value = self.value_stream(features)
+        advantage = self.adv_stream(features)
+        advantage_mean = advantage.mean(dim=1, keepdim=True)
+        return value + advantage - advantage_mean
 
 
 # ---------------------------------------------------------------------------
@@ -128,6 +249,21 @@ def save_run_config(output_dir: Path, args: argparse.Namespace) -> None:
         "ped_speed_max": args.ped_speed_max,
         "max_steps": args.max_steps,
         "seed": args.seed,
+        "hidden_sizes": args.hidden_sizes,
+        "hidden_activation": args.hidden_activation,
+        "optimizer": args.optimizer,
+        "weight_decay": args.weight_decay,
+        "momentum": args.momentum,
+        "loss_fn": args.loss_fn,
+        "eps_schedule": args.eps_schedule,
+        "prioritized": args.prioritized,
+        "priority_alpha": args.priority_alpha,
+        "priority_beta_start": args.priority_beta_start,
+        "priority_beta_frames": args.priority_beta_frames,
+        "n_step": args.n_step,
+        "double_dqn": args.double_dqn,
+        "dueling_dqn": args.dueling_dqn,
+        "tau": args.tau,
     }
     (output_dir / "run_config.json").write_text(
         json.dumps(run_config, indent=2) + "\n",
@@ -154,6 +290,29 @@ def linear_schedule(start: float, end: float, current_step: int, decay_steps: in
     return start + fraction * (end - start)
 
 
+def exponential_schedule(start: float, end: float, current_step: int, decay_steps: int) -> float:
+    if decay_steps <= 0:
+        return end
+    decay = float(current_step) / float(decay_steps)
+    return end + (start - end) * np.exp(-5.0 * decay)
+
+
+def epsilon_schedule(args: argparse.Namespace, step: int) -> float:
+    if args.eps_schedule == "linear":
+        return linear_schedule(args.eps_start, args.eps_end, step, args.eps_decay_steps)
+    if args.eps_schedule == "exponential":
+        return exponential_schedule(args.eps_start, args.eps_end, step, args.eps_decay_steps)
+    if args.eps_schedule == "constant":
+        return args.eps_end
+    if args.eps_schedule == "cosine":
+        if args.eps_decay_steps <= 0:
+            return args.eps_end
+        fraction = min(1.0, step / float(args.eps_decay_steps))
+        cosine = 0.5 * (1.0 + np.cos(np.pi * fraction))
+        return args.eps_end + (args.eps_start - args.eps_end) * cosine
+    raise ValueError(f"Unsupported eps schedule: {args.eps_schedule}")
+
+
 def train(args: argparse.Namespace) -> None:
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     print(f"Using device: {device}")
@@ -163,12 +322,41 @@ def train(args: argparse.Namespace) -> None:
     obs_dim = int(np.prod(env.observation_space.shape))
     action_dim = env.action_space.n
 
-    q_net = QNetwork(obs_dim, action_dim).to(device)
-    target_net = QNetwork(obs_dim, action_dim).to(device)
+    hidden_sizes = tuple(int(x) for x in args.hidden_sizes.split(",") if x.strip())
+    q_net = QNetwork(
+        obs_dim,
+        action_dim,
+        hidden_sizes=hidden_sizes,
+        activation=args.hidden_activation,
+        dueling=args.dueling_dqn,
+    ).to(device)
+    target_net = QNetwork(
+        obs_dim,
+        action_dim,
+        hidden_sizes=hidden_sizes,
+        activation=args.hidden_activation,
+        dueling=args.dueling_dqn,
+    ).to(device)
     target_net.load_state_dict(q_net.state_dict())
-    optimizer = torch.optim.Adam(q_net.parameters(), lr=args.learning_rate)
 
-    buffer = ReplayBuffer(args.buffer_size, obs_dim, device)
+    if args.optimizer.lower() == "adam":
+        optimizer = torch.optim.Adam(q_net.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    elif args.optimizer.lower() == "sgd":
+        optimizer = torch.optim.SGD(q_net.parameters(), lr=args.learning_rate, momentum=args.momentum, weight_decay=args.weight_decay)
+    elif args.optimizer.lower() == "rmsprop":
+        optimizer = torch.optim.RMSprop(q_net.parameters(), lr=args.learning_rate, weight_decay=args.weight_decay)
+    else:
+        raise ValueError(f"Unsupported optimizer: {args.optimizer}")
+
+    buffer = ReplayBuffer(
+        args.buffer_size,
+        obs_dim,
+        device,
+        prioritized=args.prioritized,
+        alpha=args.priority_alpha,
+        n_step=args.n_step,
+        gamma=args.gamma,
+    )
 
     run_dir = Path(args.output_dir)
     run_dir.mkdir(parents=True, exist_ok=True)
@@ -183,7 +371,7 @@ def train(args: argparse.Namespace) -> None:
     progress = trange(1, args.total_steps + 1, desc="Training", dynamic_ncols=True)
 
     for step in progress:
-        epsilon = linear_schedule(args.eps_start, args.eps_end, step, args.eps_decay_steps)
+        epsilon = epsilon_schedule(args, step)
         action = select_action(q_net, obs, action_dim, epsilon, device)
 
         next_obs, reward, terminated, truncated, info = env.step(action)
@@ -195,10 +383,27 @@ def train(args: argparse.Namespace) -> None:
         episode_steps += 1
 
         if step >= args.warmup and len(buffer) >= args.batch_size:
-            batch = buffer.sample(args.batch_size)
-            loss = compute_td_loss(q_net, target_net, optimizer, batch, args.gamma, args.max_grad_norm)
+            beta = min(1.0, args.priority_beta_start + step * (1.0 - args.priority_beta_start) / max(1, args.priority_beta_frames))
+            batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, weights, idxs = buffer.sample(args.batch_size, beta=beta)
+            loss, td_errors = compute_td_loss(
+                q_net,
+                target_net,
+                optimizer,
+                (batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones),
+                args.gamma,
+                args.max_grad_norm,
+                args.loss_fn,
+                double_dqn=args.double_dqn,
+                weights=weights,
+            )
+            if args.prioritized:
+                new_priorities = (td_errors.abs().cpu().numpy() + buffer.epsilon)
+                buffer.update_priorities(idxs, new_priorities)
 
-        if step % args.target_update == 0:
+        if args.tau < 1.0:
+            for target_param, q_param in zip(target_net.parameters(), q_net.parameters()):
+                target_param.data.copy_(target_param.data * (1.0 - args.tau) + q_param.data * args.tau)
+        elif step % args.target_update == 0:
             target_net.load_state_dict(q_net.state_dict())
 
         if done:
@@ -240,21 +445,43 @@ def compute_td_loss(
     batch: Tuple[torch.Tensor, ...],
     gamma: float,
     max_grad_norm: float,
-) -> torch.Tensor:
+    loss_fn: str,
+    double_dqn: bool = False,
+    weights: torch.Tensor | None = None,
+):
     obs, actions, rewards, next_obs, dones = batch
 
     q_values = q_net(obs).gather(1, actions.view(-1, 1)).squeeze(1)
     with torch.no_grad():
-        next_q = target_net(next_obs).max(dim=1)[0]
+        if double_dqn:
+            next_actions = q_net(next_obs).argmax(dim=1)
+            next_q = target_net(next_obs).gather(1, next_actions.view(-1, 1)).squeeze(1)
+        else:
+            next_q = target_net(next_obs).max(dim=1)[0]
         target = rewards + gamma * (1.0 - dones) * next_q
 
-    loss = F.smooth_l1_loss(q_values, target)
+    if loss_fn == "huber":
+        per_sample_loss = F.smooth_l1_loss(q_values, target, reduction="none")
+    elif loss_fn == "mse":
+        per_sample_loss = F.mse_loss(q_values, target, reduction="none")
+    elif loss_fn == "l1":
+        per_sample_loss = F.l1_loss(q_values, target, reduction="none")
+    else:
+        raise ValueError(f"Unsupported loss function: {loss_fn}")
+
+    if weights is not None:
+        loss = (per_sample_loss * weights).mean()
+    else:
+        loss = per_sample_loss.mean()
+
     optimizer.zero_grad()
     loss.backward()
     if max_grad_norm is not None and max_grad_norm > 0:
         torch.nn.utils.clip_grad_norm_(q_net.parameters(), max_grad_norm)
     optimizer.step()
-    return loss
+
+    td_errors = (target - q_values).detach()
+    return loss, td_errors
 
 
 # ---------------------------------------------------------------------------
@@ -280,6 +507,21 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--eps-start", type=float, default=1.0, help="Starting epsilon")
     p.add_argument("--eps-end", type=float, default=0.05, help="Final epsilon")
     p.add_argument("--eps-decay-steps", type=int, default=120_000, help="Steps over which epsilon decays")
+    p.add_argument("--eps-schedule", type=str, default="linear", choices=["linear", "exponential", "cosine", "constant"], help="Epsilon decay schedule")
+    p.add_argument("--hidden-sizes", type=str, default="256,256", help="Comma-separated hidden layer sizes")
+    p.add_argument("--hidden-activation", type=str, default="relu", choices=["relu", "tanh", "leaky_relu"], help="Activation for hidden layers")
+    p.add_argument("--optimizer", type=str, default="adam", choices=["adam", "sgd", "rmsprop"], help="Optimizer")
+    p.add_argument("--weight-decay", type=float, default=0.0, help="Weight decay (L2) for optimizer")
+    p.add_argument("--momentum", type=float, default=0.9, help="Momentum (for SGD)")
+    p.add_argument("--loss-fn", type=str, default="huber", choices=["huber", "mse", "l1"], help="TD loss function")
+    p.add_argument("--prioritized", action="store_true", help="Use prioritized replay buffer")
+    p.add_argument("--priority-alpha", type=float, default=0.6, help="Prioritized replay alpha")
+    p.add_argument("--priority-beta-start", type=float, default=0.4, help="Prioritized replay beta start")
+    p.add_argument("--priority-beta-frames", type=int, default=200_000, help="Frames to anneal beta to 1")
+    p.add_argument("--n-step", type=int, default=1, help="N-step returns")
+    p.add_argument("--double-dqn", action="store_true", help="Use Double DQN")
+    p.add_argument("--dueling-dqn", action="store_true", help="Use Dueling DQN")
+    p.add_argument("--tau", type=float, default=1.0, help="Soft target update coefficient (1.0 = hard update)")
     p.add_argument("--warmup", type=int, default=5_000, help="Steps before starting updates")
     p.add_argument("--target-update", type=int, default=2_000, help="Steps between target network syncs")
     p.add_argument("--max-grad-norm", type=float, default=5.0, help="Gradient clipping norm (0 to disable)")
