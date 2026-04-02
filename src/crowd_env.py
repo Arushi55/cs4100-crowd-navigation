@@ -94,33 +94,39 @@ class CrowdNavEnv(gym.Env):
         # reward params
         self.goal_visual_radius = 16.0
         self.goal_reward = 300.0
-        self.step_penalty = -0.02
-        self.collision_penalty = -18.0
+        self.step_penalty = -0.05
+        self.collision_penalty = -24.0
         self.personal_space_radius = 52.0
-        self.personal_space_penalty = -2.35
+        self.personal_space_penalty = -2.8
         self.near_miss_radius = 38.0
-        self.near_miss_penalty = -1.15
+        self.near_miss_penalty = -1.4
         self.caution_radius = 80.0
-        self.caution_penalty = -0.42
+        self.caution_penalty = -0.5
         self.wall_penalty_radius = 22.0
         self.wall_penalty_scale = -0.44
         self.wall_scrape_penalty = -1.1
         self.wall_approach_radius = 56.0
-        self.wall_approach_scale = -0.6
-        self.action_smoothing = 0.35
-        self.turn_penalty_scale = -0.18
-        self.progress_scale = 3.0          # reward for moving closer to goal
+        self.wall_approach_scale = -0.35
+        self.action_smoothing = 0.2
+        self.turn_penalty_scale = -0.06
+        self.progress_scale = 3.8          # reward for moving closer to goal
         self.blocking_radius = 84.0
-        self.blocking_path_width = 26.0
-        self.blocking_penalty_scale = -2.25
+        self.blocking_path_width = 20.0
+        self.blocking_penalty_scale = -1.35
         self.slowdown_penalty_radius = 82.0
         self.slowdown_penalty_scale = -1.85
-        self.crowd_pressure_radius = 92.0
-        self.crowd_pressure_scale = -0.95
-        self.crowd_approach_radius = 112.0
-        self.crowd_approach_scale = -0.65
-        self.timeout_penalty = -45.0       # penalty for running out of steps
-        
+        self.crowd_pressure_radius = 72.0
+        self.crowd_pressure_scale = -0.55
+        self.crowd_approach_radius = 88.0
+        self.crowd_approach_scale = -0.35
+        self.timeout_penalty = -120.0       # penalty for running out of steps
+        self.no_progress_epsilon = 0.15
+        self.no_progress_grace_steps = 60
+        self.no_progress_penalty = -0.35
+        self.near_goal_commit_radius_scale = 2.5
+        self.near_goal_penalty_scale = 0.4
+        self.near_goal_proximity_bonus = 0.3
+
         # state
         self.scenario: Scenario | None = None
         self.nav_grid: NavGrid | None = None
@@ -142,6 +148,7 @@ class CrowdNavEnv(gym.Env):
         self._ped_goal_dwell_frames: dict[int, int] = {}
         self._ped_pending_perimeter_respawn: set[int] = set()
         self._flow_pedestrian_ids: set[int] = set()
+        self._no_progress_steps = 0
 
         self.screen = None
         self.clock = None
@@ -183,6 +190,7 @@ class CrowdNavEnv(gym.Env):
         self._quit_requested = False
         self._ped_goal_dwell_frames.clear()
         self._ped_pending_perimeter_respawn.clear()
+        self._no_progress_steps = 0
         
         observation = self._get_observation()
         info = {}
@@ -281,6 +289,7 @@ class CrowdNavEnv(gym.Env):
             "episode_pedestrian_slowdown": self._episode_pedestrian_slowdown,
             "episode_blocking_pressure": self._episode_blocking_pressure,
             "episode_wall_contacts": self._episode_wall_contacts,
+            "no_progress_steps": self._no_progress_steps,
         }
         
         return observation, reward, terminated, truncated, info
@@ -403,10 +412,33 @@ class CrowdNavEnv(gym.Env):
     def _compute_reward(self, dist_to_goal: float) -> float:
         """compute step reward (goal reward added separately in step())."""
         reward = self.step_penalty
-        
+
+        goal_contact_radius = self._goal_contact_radius()
+        near_goal_radius = goal_contact_radius * self.near_goal_commit_radius_scale
+        in_near_goal_zone = dist_to_goal <= near_goal_radius
+        if near_goal_radius > 1e-6:
+            near_goal_ratio = float(np.clip(dist_to_goal / near_goal_radius, 0.0, 1.0))
+        else:
+            near_goal_ratio = 1.0
+        # Blend penalties down as we approach the goal.
+        penalty_scale = self.near_goal_penalty_scale + (1.0 - self.near_goal_penalty_scale) * near_goal_ratio
+        if in_near_goal_zone:
+            reward += self.near_goal_proximity_bonus * (1.0 - near_goal_ratio)
+
         # progress-based shaping: reward for getting closer, penalize moving away
         progress = self._prev_dist_to_goal - dist_to_goal
         reward += progress * self.progress_scale
+        if in_near_goal_zone:
+            self._no_progress_steps = 0
+        else:
+            if progress < self.no_progress_epsilon:
+                self._no_progress_steps += 1
+            else:
+                self._no_progress_steps = 0
+            if self._no_progress_steps > self.no_progress_grace_steps:
+                overflow = self._no_progress_steps - self.no_progress_grace_steps
+                ramp = min(1.0, overflow / max(1.0, float(self.no_progress_grace_steps)))
+                reward += self.no_progress_penalty * (1.0 + ramp)
         
         for ped in self.pedestrians:
             dist = np.hypot(self.robot.x - ped.x, self.robot.y - ped.y)
@@ -416,29 +448,29 @@ class CrowdNavEnv(gym.Env):
                 reward += self.collision_penalty
             elif dist < self.personal_space_radius:
                 closeness = 1.0 - (dist / self.personal_space_radius)
-                reward += self.personal_space_penalty * (1.0 + closeness)
-                reward += self._near_miss_penalty(dist, overlap_dist)
+                reward += penalty_scale * self.personal_space_penalty * (1.0 + closeness)
+                reward += penalty_scale * self._near_miss_penalty(dist, overlap_dist)
             elif dist < self.caution_radius:
                 caution_scale = 1.0 - (
                     (dist - self.personal_space_radius)
                     / (self.caution_radius - self.personal_space_radius)
                 )
-                reward += self.caution_penalty * max(0.0, caution_scale)
+                reward += penalty_scale * self.caution_penalty * max(0.0, caution_scale)
             blocking_penalty = self._blocking_penalty(ped, dist)
-            reward += blocking_penalty
-            reward += self._pedestrian_slowdown_penalty(ped, dist, blocking_penalty)
+            reward += penalty_scale * blocking_penalty
+            reward += penalty_scale * self._pedestrian_slowdown_penalty(ped, dist, blocking_penalty)
 
-        reward += self._crowd_pressure_penalty()
-        reward += self._crowd_approach_penalty()
-        reward += self._wall_approach_penalty()
+        reward += penalty_scale * self._crowd_pressure_penalty()
+        reward += penalty_scale * self._crowd_approach_penalty()
+        reward += penalty_scale * self._wall_approach_penalty()
         reward += self._last_turn_penalty
 
         nearest_wall = self._nearest_wall_distance()
         if nearest_wall < self.wall_penalty_radius:
             wall_closeness = 1.0 - (nearest_wall / self.wall_penalty_radius)
-            reward += self.wall_penalty_scale * (wall_closeness ** 2)
+            reward += penalty_scale * self.wall_penalty_scale * (wall_closeness ** 2)
         if self._last_blocked_axes:
-            reward += self.wall_scrape_penalty * self._last_blocked_axes
+            reward += penalty_scale * self.wall_scrape_penalty * self._last_blocked_axes
 
         return reward
 
@@ -574,7 +606,7 @@ class CrowdNavEnv(gym.Env):
 
             rel_dir = np.array([rel_x / dist, rel_y / dist], dtype=np.float32)
             alignment = float(np.dot(move_dir, rel_dir))
-            if alignment <= 0.15:
+            if alignment <= 0.35:
                 continue
 
             proximity = 1.0 - (dist / self.crowd_approach_radius)

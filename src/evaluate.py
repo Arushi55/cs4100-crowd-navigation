@@ -8,15 +8,11 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from stable_baselines3 import DQN, PPO
 
 from crowd_env import CrowdNavEnv
 from wrappers import ObservationStackWrapper
 
-ALGORITHMS = {
-    "dqn": DQN,
-    "ppo": PPO,
-}
+SB3_ALGOS = ("dqn", "ppo")
 
 
 def parse_args() -> argparse.Namespace:
@@ -30,7 +26,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument(
         "--algo",
         type=str,
-        choices=sorted(ALGORITHMS),
+        choices=sorted(SB3_ALGOS),
         default=None,
         help="Algorithm used to train the SB3 model (auto-detected when possible)",
     )
@@ -79,6 +75,17 @@ def _parse_hidden_sizes(raw: object, default: tuple[int, ...] = (256, 256)) -> t
     return default
 
 
+def _load_sb3_algorithms() -> dict[str, type]:
+    try:
+        from stable_baselines3 import DQN, PPO
+    except Exception as exc:
+        raise RuntimeError(
+            "stable-baselines3 is required for evaluating .zip SB3 models. "
+            "Install it or evaluate a .pt DQN checkpoint instead."
+        ) from exc
+    return {"dqn": DQN, "ppo": PPO}
+
+
 def main() -> None:
     args = parse_args()
 
@@ -87,7 +94,7 @@ def main() -> None:
     if args.model:
         model_path = Path(args.model)
     else:
-        model_path = repo_root / "training_output" / "best_model" / "best_model.zip"
+        model_path = repo_root / "training_output" / "dqn" / "dqn.pt"
 
     if not model_path.exists():
         alt_zip = model_path.with_suffix(".zip")
@@ -173,11 +180,18 @@ def main() -> None:
         q_net.load_state_dict(checkpoint["q_net"])
         q_net.eval()
     else:
-        model_cls = ALGORITHMS.get(algo_name)
+        try:
+            algorithms = _load_sb3_algorithms()
+        except RuntimeError as exc:
+            env.close()
+            print(f"  Error: {exc}")
+            sys.exit(1)
+
+        model_cls = algorithms.get(algo_name)
         if model_cls is None:
             env.close()
             print(f"  Error: unsupported algorithm '{algo_name}'.")
-            print(f"  Supported: {', '.join(sorted(ALGORITHMS.keys()))}")
+            print(f"  Supported SB3 algorithms: {', '.join(sorted(algorithms.keys()))}")
             sys.exit(1)
         model = model_cls.load(str(model_path))
 

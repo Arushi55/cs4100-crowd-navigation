@@ -7,15 +7,34 @@ import sys
 from pathlib import Path
 
 import numpy as np
-from stable_baselines3 import DQN, PPO
 
 from crowd_env import CrowdNavEnv
 from wrappers import ObservationStackWrapper
 
-ALGORITHMS = {
-    "dqn": DQN,
-    "ppo": PPO,
-}
+SB3_ALGOS = ("dqn", "ppo")
+
+
+def _load_sb3_algorithms() -> dict[str, type]:
+    try:
+        from stable_baselines3 import DQN, PPO
+    except Exception as exc:
+        raise RuntimeError(
+            "stable-baselines3 is required for benchmarking .zip SB3 models. "
+            "Install it or benchmark a .pt DQN checkpoint instead."
+        ) from exc
+    return {"dqn": DQN, "ppo": PPO}
+
+
+def _parse_hidden_sizes(raw: object, default: tuple[int, ...] = (256, 256)) -> tuple[int, ...]:
+    if isinstance(raw, str):
+        values = [x.strip() for x in raw.split(",") if x.strip()]
+        if not values:
+            return default
+        return tuple(int(x) for x in values)
+    if isinstance(raw, (list, tuple)):
+        values = [int(x) for x in raw]
+        return tuple(values) if values else default
+    return default
 
 
 def run_benchmark(
@@ -33,7 +52,9 @@ def run_benchmark(
         speed_multipliers = [1.0, 1.5, 2.0, 3.0]
 
     model_path_obj = Path(model_path)
-    model_type, frame_stack = load_model_config(model_path_obj)
+    run_config = load_run_config(model_path_obj)
+    model_type = str(run_config.get("algo", "dqn"))
+    frame_stack = int(run_config.get("frame_stack", 1))
     is_torch_dqn_checkpoint = model_path_obj.suffix == ".pt"
 
     if is_torch_dqn_checkpoint:
@@ -60,7 +81,16 @@ def run_benchmark(
         tmp_env.close()
 
         checkpoint = torch.load(model_path_obj, map_location=device)
-        q_net = QNetwork(obs_dim, action_dim).to(device)
+        hidden_sizes = _parse_hidden_sizes(run_config.get("hidden_sizes", "256,256"))
+        activation = str(run_config.get("hidden_activation", "relu"))
+        dueling = bool(run_config.get("dueling_dqn", False))
+        q_net = QNetwork(
+            obs_dim,
+            action_dim,
+            hidden_sizes=hidden_sizes,
+            activation=activation,
+            dueling=dueling,
+        ).to(device)
         q_net.load_state_dict(checkpoint["q_net"])
         q_net.eval()
 
@@ -68,7 +98,15 @@ def run_benchmark(
             obs_t = torch.as_tensor(obs, device=device, dtype=torch.float32).unsqueeze(0)
             return int(torch.argmax(q_net(obs_t), dim=1).item())
     else:
-        model = ALGORITHMS[model_type].load(model_path)
+        try:
+            algorithms = _load_sb3_algorithms()
+        except RuntimeError as exc:
+            print(f"Could not load SB3 dependencies: {exc}")
+            return
+        if model_type not in algorithms:
+            print(f"Unsupported SB3 algorithm '{model_type}'. Supported: {', '.join(sorted(SB3_ALGOS))}")
+            return
+        model = algorithms[model_type].load(model_path)
 
         def action_fn(obs: np.ndarray) -> int:
             action, _ = model.predict(obs, deterministic=True)
@@ -159,16 +197,15 @@ def run_benchmark(
     print(f"{'=' * 80}")
 
 
-def load_model_config(model_path: Path) -> tuple[str, int]:
+def load_run_config(model_path: Path) -> dict:
     candidate_paths = [
         model_path.parent / "run_config.json",
         model_path.parent.parent / "run_config.json",
     ]
     for path in candidate_paths:
         if path.exists():
-            data = json.loads(path.read_text(encoding="utf-8"))
-            return data.get("algo", "dqn"), int(data.get("frame_stack", 1))
-    return "dqn", 1
+            return json.loads(path.read_text(encoding="utf-8"))
+    return {}
 
 
 def _evaluate(
@@ -248,13 +285,13 @@ def _evaluate(
 
 if __name__ == "__main__":
     repo_root = Path(__file__).resolve().parent.parent
-    default_model = repo_root / "training_output" / "best_model" / "best_model.zip"
+    default_model = repo_root / "training_output" / "dqn" / "dqn.pt"
 
     model_path = sys.argv[1] if len(sys.argv) > 1 else str(default_model)
 
     if not Path(model_path).exists():
         print(f"Model not found: {model_path}")
-        print("Train first:  python train.py")
+        print("Train first:  python dqn.py")
         sys.exit(1)
 
     for scenario in ["airport", "home", "shopping_center"]:

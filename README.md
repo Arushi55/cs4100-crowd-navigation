@@ -5,7 +5,7 @@ Pygame-based crowd navigation sandbox with two main pieces:
 - an interactive simulator for manually watching scenarios and pedestrian behavior
 - a Gymnasium RL environment for training DQN or PPO agents on the same maps
 
-The current workflow is centered around the airport scenario, grouped pedestrian traffic, and PPO training with frame-stacked observations.
+The primary workflow is now the custom PyTorch DQN pipeline (`src/dqn.py`) with frame-stacked observations.
 
 ## Quick setup
 
@@ -57,22 +57,18 @@ Controls:
 - `1`, `2`, `3` switch scenarios
 - close the pygame window to exit
 
-## RL training workflow
+## RL training workflow (DQN-first)
 
-The main training entrypoint is:
+Main training entrypoint:
 
 ```bash
-python src/train.py
+python src/dqn.py
 ```
-
-The current recommended setup is PPO with frame stacking on a single scenario while varying pedestrian count across episodes.
 
 ### Recommended airport command
 
-This is the best starting point for the current repo:
-
 ```bash
-python src/train.py \
+python src/dqn.py \
   --scenario airport \
   --vary-pedestrians \
   --pedestrians-min 12 --pedestrians-max 24 \
@@ -83,122 +79,73 @@ python src/train.py \
   --batch-size 256 \
   --learning-rate 3e-4 \
   --target-update 2000 \
-  --output-dir training_output/manual_dqn
+  --output-dir training_output/dqn
 ```
 
-### What the training script saves
+### What the DQN script saves
 
-Each run writes a folder under `training_output/` containing:
+Each run writes:
 
-- `best_model/best_model.zip`
-- `final_model.zip`
-- `checkpoints/`
-- `logs/`
-- `run_config.json`
+- `training_output/dqn/dqn.pt`
+- `training_output/dqn/run_config.json`
 
-`best_model.zip` is usually the model you want to evaluate or visualize first.
-
-### Resume training
-
-To continue from an existing checkpoint:
-
-```bash
-python src/train.py \
-  --scenario airport \
-  --vary-pedestrians \
-  --pedestrians-min 16 \
-  --pedestrians-max 30 \
-  --frame-stack 4 \
-  --num-envs 4 \
-  --total-timesteps 80000 \
-  --resume training_output/airport_ppo_run/best_model/best_model.zip \
-  --output-dir training_output/airport_ppo_run_resume
-```
+The script periodically overwrites `dqn.pt` as checkpoints and writes the final weights to the same path.
 
 ## Training parameters that matter most
 
-These are the ones the team will probably tweak most often:
+These are the most commonly tuned DQN flags:
 
 - `--scenario`
-  - choose the map to train on
 - `--pedestrians`
-  - fixed pedestrian count for single-density training
 - `--vary-pedestrians`
-  - randomizes pedestrian count every episode for one scenario
 - `--pedestrians-min`, `--pedestrians-max`
-  - crowd range when varying pedestrians
 - `--ped-speed-min`, `--ped-speed-max`
-  - speed multiplier range applied each episode in variable-crowd environments
 - `--frame-stack`
-  - how many consecutive observations are stacked together
-  - current recommended value is `4`
-- `--num-envs`
-  - number of parallel PPO envs
-  - current recommended value is `4`
-- `--total-timesteps`
-  - total training budget
-- `--max-episode-steps`
-  - timeout horizon before an episode truncates
+- `--total-steps`
+- `--max-steps`
 - `--learning-rate`
-  - PPO default in the script is `1e-4`, but our stronger recent airport runs used `3e-4` or `2.5e-4`
 - `--batch-size`
-  - typical PPO values we used were `256`
-- `--n-steps`
-  - PPO rollout length per env before update
-  - typical value: `1024`
-- `--gamma`
-  - reward discount factor
-  - recent runs used `0.995`
-- `--ent-coef`
-  - exploration pressure for PPO
-  - recent runs used `0.01` or `0.008`
-- `--eval-freq`
-  - how often the script runs the eval callback
-- `--checkpoint-freq`
-  - how often intermediate checkpoints are saved
-- `--resume`
-  - path to a `.zip` model for continued training
+- `--buffer-size`
+- `--target-update`
+- `--eps-start`, `--eps-end`, `--eps-decay-steps`
+- `--hidden-sizes`, `--hidden-activation`
+- `--dueling-dqn`, `--double-dqn`
+- `--prioritized`, `--priority-alpha`, `--priority-beta-start`, `--priority-beta-frames`
+- `--n-step`
 - `--output-dir`
-  - where run artifacts are written
 
 ## Training modes
-
-There are three main training modes in `src/train.py`.
 
 ### 1. Fixed single-scenario training
 
 ```bash
-python src/train.py --scenario airport --pedestrians 24
+python src/dqn.py --scenario airport --pedestrians 24
 ```
-
-Use this when you want one fixed density.
 
 ### 2. Single-scenario variable crowd training
 
 ```bash
-python src/train.py \
+python src/dqn.py \
   --scenario airport \
   --vary-pedestrians \
   --pedestrians-min 16 \
   --pedestrians-max 30
 ```
 
-Use this when you want one map but different crowd sizes each episode. This is the most useful mode for current airport work.
-
-### 3. Multi-scenario curriculum-style training
+### 3. Multi-scenario training
 
 ```bash
-python src/train.py --multi-scenario
+python src/dqn.py --multi-scenario
 ```
 
-This samples across `airport`, `home`, and `shopping_center`, along with random crowd count and speed.
+Optional legacy path: `src/train.py` still exists for SB3 PPO/DQN experiments, but it is no longer the primary workflow.
 
 ## Evaluate a trained model
 
 Main entrypoint:
 
 ```bash
-python src/evaluate.py --model training_output/airport_ppo_run/best_model/best_model.zip
+python src/evaluate.py --model training_output/dqn/dqn.pt
 ```
 
 ### Batch evaluation
@@ -231,7 +178,7 @@ Reported metrics include:
 For a broader sweep across pedestrian counts and speeds:
 
 ```bash
-python src/benchmark.py training_output/dqn/best_model/best_model.zip
+python src/benchmark.py training_output/dqn/dqn.pt
 ```
 
 This prints summary tables for:
@@ -258,7 +205,8 @@ The airport scenario now uses grouped edge-to-edge pedestrian traffic intended t
 ```text
 src/main.py                              # Interactive simulator
 src/crowd_env.py                         # Gymnasium crowd-navigation environment
-src/train.py                             # RL training entrypoint
+src/dqn.py                               # Primary custom PyTorch DQN trainer
+src/train.py                             # Optional legacy SB3 trainer
 src/evaluate.py                          # Model evaluation + pygame viewer
 src/benchmark.py                         # Batch benchmarking across counts/speeds
 src/multi_env.py                         # Variable-crowd and multi-scenario env wrappers
