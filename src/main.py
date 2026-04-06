@@ -18,9 +18,10 @@ from environment.scenarios import (
     build_scenario,
     generate_pedestrian_population,
     load_scenario_templates,
-    respawn_family_group_members,
-    random_pedestrian_route,
-    _build_behavior,
+)
+from environment.pedestrian_lifecycle import (
+    reassign_reached_goals,
+    select_flow_pedestrians,
 )
 from agent.behaviors import BEHAVIORS, ControlMode
 from agent.sensor import RaySensor, draw_rays
@@ -134,42 +135,6 @@ def generate_pedestrians(
     )
 
 
-def reassign_reached_goals(
-    pedestrians: list[Pedestrian],
-    scenario: Scenario,
-    nav_grid: NavGrid,
-    rng: np.random.Generator,
-) -> None:
-    from environment.behaviors import RandomWalkerBehavior
-
-    respawned_groups: set[int] = set()
-    for ped in pedestrians:
-        if ped.has_reached_goal():
-            if ped.group_id is not None and ped.group_id not in respawned_groups:
-                group_members = [member for member in pedestrians if member.group_id == ped.group_id]
-                respawn_family_group_members(
-                    group_members,
-                    nav_grid,
-                    rng,
-                    obstacles=scenario.obstacles,
-                    robot_x=None,
-                    robot_y=None,
-                    personal_space_radius=0.0,
-                )
-                respawned_groups.add(ped.group_id)
-                continue
-            if isinstance(ped.behavior, RandomWalkerBehavior):
-                # Keep RandomWalker velocity processing but handle goal reset from safe route
-                (_, _), (gx, gy) = random_pedestrian_route(
-                    scenario, rng, ped.goal_region_indices, obstacles=scenario.obstacles
-                )
-                ped.set_goal(gx, gy, nav_grid=nav_grid, rng=rng)
-            else:
-                ped.respawn(rng, obstacles=scenario.obstacles, nav_grid=nav_grid, robot_x=None, robot_y=None, personal_space_radius=0.0)
-            if hasattr(ped.behavior, 'frame_count'):
-                ped.behavior.frame_count = 0
-
-
 def draw_scenario(screen: pygame.Surface, scenario: Scenario) -> None:
     for obstacle in scenario.obstacles:
         pygame.draw.rect(screen, OBSTACLE_COLOR, obstacle, border_radius=4)
@@ -197,7 +162,10 @@ def run() -> None:
     if args.scenario not in templates:
         raise ValueError(f"Unknown scenario '{args.scenario}'. Available: {', '.join(scenario_ids)}")
 
-    pygame.init()
+    if not pygame.display.get_init():
+        pygame.display.init()
+    if not pygame.font.get_init():
+        pygame.font.init()
     screen = pygame.display.set_mode((WIDTH, HEIGHT))
     pygame.display.set_caption("Crowd Navigation Sandbox")
     clock = pygame.time.Clock()
@@ -226,6 +194,9 @@ def run() -> None:
     steps = 0
     total_penalties = []
     total_steps = []
+    goal_dwell_frames: dict[int, int] = {}
+    pending_perimeter_respawn: set[int] = set()
+    flow_pedestrian_ids = select_flow_pedestrians(pedestrians, current_scenario_id, rng)
 
     running = True
     while running:
@@ -233,6 +204,9 @@ def run() -> None:
             if event.type == pygame.QUIT:
                 running = False
             elif event.type == pygame.KEYDOWN:
+                if event.key in (pygame.K_ESCAPE, pygame.K_q):
+                    running = False
+                    continue
                 if event.key == pygame.K_1:
                     current_scenario_id = "home"
                 elif event.key == pygame.K_2:
@@ -250,6 +224,13 @@ def run() -> None:
                     rng=rng,
                     pedestrian_count=args.pedestrians,
                     random_world=args.random_world,
+                )
+                goal_dwell_frames.clear()
+                pending_perimeter_respawn.clear()
+                flow_pedestrian_ids = select_flow_pedestrians(
+                    pedestrians,
+                    current_scenario_id,
+                    rng,
                 )
                 total_penalty = 0.0
                 steps = 0
@@ -270,8 +251,22 @@ def run() -> None:
             robot.move_with_obstacles(move, scenario.obstacles)
 
         for ped in pedestrians:
+            if goal_dwell_frames.get(id(ped), 0) > 0:
+                ped.vx *= 0.5
+                ped.vy *= 0.5
+                continue
             ped.update(pedestrians, scenario.obstacles, rng=rng)
-        reassign_reached_goals(pedestrians, scenario, nav_grid, rng=rng)
+        reassign_reached_goals(
+            pedestrians,
+            scenario,
+            nav_grid,
+            rng=rng,
+            scenario_id=current_scenario_id,
+            goal_dwell_frames=goal_dwell_frames,
+            pending_perimeter_respawn=pending_perimeter_respawn,
+            flow_pedestrian_ids=flow_pedestrian_ids,
+            sim_fps=FPS,
+        )
 
         total_penalty += compute_penalty(robot, pedestrians)
         distance_to_goal = pygame.Vector2(robot.x - goal_pos.x, robot.y - goal_pos.y).length()
@@ -293,6 +288,13 @@ def run() -> None:
                 rng=rng,
                 pedestrian_count=args.pedestrians,
                 random_world=args.random_world,
+            )
+            goal_dwell_frames.clear()
+            pending_perimeter_respawn.clear()
+            flow_pedestrian_ids = select_flow_pedestrians(
+                pedestrians,
+                current_scenario_id,
+                rng,
             )
             total_penalty = 0.0
             steps = 0

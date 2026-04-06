@@ -25,8 +25,8 @@
     [300, 150, 300, 350]
   ],
   "pedestrian_behaviors": [
-    { "type": "stationary", "count": 4 },
-    { "type": "social_force", "count": 4 },
+    { "type": "stationary", "count": 2, "movement_probability": 0.08 },
+    { "type": "social_force", "count": 6 },
     { "type": "random_walker", "count": 2, "goal_region_indices": [0, 1, 2, 3] },
     { "type": "zigzag", "count": 2 }
   ],

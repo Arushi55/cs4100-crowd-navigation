@@ -1,4 +1,4 @@
-"""Evaluate a trained DQN agent."""
+"""Evaluate a trained crowd navigation agent with optional visual rendering."""
 
 from __future__ import annotations
 
@@ -8,56 +8,132 @@ import sys
 from pathlib import Path
 
 import numpy as np
-import torch
 
 from crowd_env import CrowdNavEnv
 from wrappers import ObservationStackWrapper
-from dqn import QNetwork
+
+SB3_ALGOS = ("dqn", "ppo")
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description="Evaluate a DQN agent")
-    p.add_argument("--model", type=str, default=None, help="Path to checkpoint (.pt)")
-    p.add_argument("--frame-stack", type=int, default=None, help="Override frame stack (defaults to run_config)")
-    p.add_argument("--scenario", type=str, default=None, help="Scenario id (defaults to run_config)")
-    p.add_argument("--pedestrians", type=int, default=None, help="Pedestrian count (defaults to run_config or 12)")
-    p.add_argument("--episodes", type=int, default=10, help="Number of episodes")
-    p.add_argument("--max-steps", type=int, default=None, help="Max steps per episode (defaults to run_config)")
+    p = argparse.ArgumentParser(description="Evaluate a trained crowd navigation agent")
+    p.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        help="Path to model checkpoint (.zip for SB3, .pt for PyTorch DQN)",
+    )
+    p.add_argument(
+        "--algo",
+        type=str,
+        choices=sorted(SB3_ALGOS),
+        default=None,
+        help="Algorithm used to train the SB3 model (auto-detected when possible)",
+    )
+    p.add_argument(
+        "--frame-stack",
+        type=int,
+        default=None,
+        help="Observation stack size used during training (auto-detected when possible)",
+    )
+    p.add_argument("--scenario", type=str, default=None, help="Scenario id")
+    p.add_argument("--pedestrians", type=int, default=None, help="Number of pedestrians")
+    p.add_argument("--episodes", type=int, default=10, help="Number of episodes to run")
+    p.add_argument("--max-steps", type=int, default=None, help="Max steps per episode")
     p.add_argument("--seed", type=int, default=123, help="Random seed")
-    p.add_argument("--no-render", action="store_true", help="Disable rendering")
-    p.add_argument("--fps", type=int, default=30, help="Rendering FPS")
+    p.add_argument(
+        "--deterministic",
+        action="store_true",
+        default=True,
+        help="Use deterministic actions for SB3 models",
+    )
+    p.add_argument("--no-render", action="store_true", help="Disable rendering (for batch evaluation)")
+    p.add_argument("--fps", type=int, default=30, help="Rendering FPS (lower = easier to watch)")
     return p.parse_args()
 
 
 def load_run_config(model_path: Path) -> dict:
-    for candidate in [model_path.parent / "run_config.json", model_path.parent.parent / "run_config.json"]:
-        if candidate.exists():
-            return json.loads(candidate.read_text(encoding="utf-8"))
+    candidate_paths = [
+        model_path.parent / "run_config.json",
+        model_path.parent.parent / "run_config.json",
+    ]
+    for path in candidate_paths:
+        if path.exists():
+            return json.loads(path.read_text(encoding="utf-8"))
     return {}
 
 
-@torch.no_grad()
-def greedy_action(q_net: QNetwork, obs: np.ndarray, device: torch.device) -> int:
-    obs_t = torch.as_tensor(obs, device=device, dtype=torch.float32).unsqueeze(0)
-    return int(torch.argmax(q_net(obs_t), dim=1).item())
+def _parse_hidden_sizes(raw: object, default: tuple[int, ...] = (256, 256)) -> tuple[int, ...]:
+    if isinstance(raw, str):
+        values = [x.strip() for x in raw.split(",") if x.strip()]
+        if not values:
+            return default
+        return tuple(int(x) for x in values)
+    if isinstance(raw, (list, tuple)):
+        values = [int(x) for x in raw]
+        return tuple(values) if values else default
+    return default
+
+
+def _load_sb3_algorithms() -> dict[str, type]:
+    try:
+        from stable_baselines3 import DQN, PPO
+    except Exception as exc:
+        raise RuntimeError(
+            "stable-baselines3 is required for evaluating .zip SB3 models. "
+            "Install it or evaluate a .pt DQN checkpoint instead."
+        ) from exc
+    return {"dqn": DQN, "ppo": PPO}
 
 
 def main() -> None:
     args = parse_args()
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     repo_root = Path(__file__).resolve().parent.parent
-    model_path = Path(args.model) if args.model else repo_root / "training_output" / "dqn" / "dqn.pt"
+
+    if args.model:
+        model_path = Path(args.model)
+    else:
+        model_path = repo_root / "training_output" / "dqn" / "dqn.pt"
+
     if not model_path.exists():
-        print(f"Model not found at {model_path}")
-        print("Train first: python src/dqn.py")
-        sys.exit(1)
+        alt_zip = model_path.with_suffix(".zip")
+        alt_pt = model_path.with_suffix(".pt")
+        if alt_zip.exists():
+            model_path = alt_zip
+        elif alt_pt.exists():
+            model_path = alt_pt
+        else:
+            print(f"  Error: Model not found at {model_path}")
+            print("  Train a model first:  python src/train.py  or  python src/dqn.py")
+            sys.exit(1)
 
     run_config = load_run_config(model_path)
-    frame_stack = args.frame_stack or int(run_config.get("frame_stack", 1))
+
+    frame_stack = args.frame_stack if args.frame_stack is not None else int(run_config.get("frame_stack", 1))
     scenario = args.scenario or run_config.get("scenario", "airport")
-    pedestrians = args.pedestrians or int(run_config.get("pedestrians", 12))
-    max_steps = args.max_steps or int(run_config.get("max_steps", 1000))
+    pedestrians = args.pedestrians if args.pedestrians is not None else int(run_config.get("pedestrians", 12))
+    max_steps = args.max_steps if args.max_steps is not None else int(
+        run_config.get("max_steps", run_config.get("max_episode_steps", 1000))
+    )
+
+    is_torch_dqn_checkpoint = model_path.suffix == ".pt"
+    algo_name = args.algo or run_config.get("algo", "dqn")
+
+    print("=" * 60)
+    print("  Crowd Navigation — Agent Evaluation")
+    print("=" * 60)
+    print(f"  Model:       {model_path}")
+    if is_torch_dqn_checkpoint:
+        print("  Algorithm:   DQN (PyTorch)")
+    else:
+        print(f"  Algorithm:   {algo_name.upper()}")
+    print(f"  Frame stack: {frame_stack}")
+    print(f"  Scenario:    {scenario}")
+    print(f"  Pedestrians: {pedestrians}")
+    print(f"  Episodes:    {args.episodes}")
+    print(f"  Render:      {not args.no_render}")
+    print("=" * 60)
 
     render_mode = None if args.no_render else "human"
     env = CrowdNavEnv(
@@ -71,25 +147,53 @@ def main() -> None:
         env = ObservationStackWrapper(env, stack_size=frame_stack)
     env.metadata["render_fps"] = args.fps
 
-    obs_dim = int(np.prod(env.observation_space.shape))
-    action_dim = env.action_space.n
+    model = None
+    q_net = None
+    device = None
 
-    ckpt = torch.load(model_path, map_location=device)
-    dueling = bool(run_config.get("dueling_dqn", False))
-    hidden_sizes = run_config.get("hidden_sizes", "256,256")
-    hidden_sizes = tuple(int(x) for x in hidden_sizes.split(",") if x.strip())
-    activation = run_config.get("hidden_activation", "relu")
+    if is_torch_dqn_checkpoint:
+        try:
+            import torch
+            from dqn import QNetwork
+        except Exception as exc:
+            env.close()
+            print(f"  Error loading PyTorch DQN dependencies: {exc}")
+            print("  Install dependencies from src/requirements.txt and retry.")
+            sys.exit(1)
 
-    q_net = QNetwork(
-        obs_dim,
-        action_dim,
-        hidden_sizes=hidden_sizes,
-        activation=activation,
-        dueling=dueling,
-    ).to(device)
+        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+        obs_dim = int(np.prod(env.observation_space.shape))
+        action_dim = env.action_space.n
+        checkpoint = torch.load(model_path, map_location=device)
 
-    q_net.load_state_dict(ckpt["q_net"])
-    q_net.eval()
+        hidden_sizes = _parse_hidden_sizes(run_config.get("hidden_sizes", "256,256"))
+        activation = str(run_config.get("hidden_activation", "relu"))
+        dueling = bool(run_config.get("dueling_dqn", False))
+
+        q_net = QNetwork(
+            obs_dim,
+            action_dim,
+            hidden_sizes=hidden_sizes,
+            activation=activation,
+            dueling=dueling,
+        ).to(device)
+        q_net.load_state_dict(checkpoint["q_net"])
+        q_net.eval()
+    else:
+        try:
+            algorithms = _load_sb3_algorithms()
+        except RuntimeError as exc:
+            env.close()
+            print(f"  Error: {exc}")
+            sys.exit(1)
+
+        model_cls = algorithms.get(algo_name)
+        if model_cls is None:
+            env.close()
+            print(f"  Error: unsupported algorithm '{algo_name}'.")
+            print(f"  Supported SB3 algorithms: {', '.join(sorted(algorithms.keys()))}")
+            sys.exit(1)
+        model = model_cls.load(str(model_path))
 
     episode_rewards = []
     episode_lengths = []
@@ -99,17 +203,6 @@ def main() -> None:
     episode_intrusions = []
     episode_slowdown = []
     episode_blocking = []
-
-    print("=" * 60)
-    print("  Crowd Navigation — DQN Evaluation")
-    print("=" * 60)
-    print(f"  Model:       {model_path}")
-    print(f"  Frame stack: {frame_stack}")
-    print(f"  Scenario:    {scenario}")
-    print(f"  Pedestrians: {pedestrians}")
-    print(f"  Episodes:    {args.episodes}")
-    print(f"  Render:      {not args.no_render}")
-    print("=" * 60)
 
     for ep in range(args.episodes):
         obs, info = env.reset()
@@ -123,7 +216,13 @@ def main() -> None:
         step = 0
 
         while not done:
-            action = greedy_action(q_net, obs, device)
+            if is_torch_dqn_checkpoint:
+                obs_t = torch.as_tensor(obs, device=device, dtype=torch.float32).unsqueeze(0)
+                action = int(torch.argmax(q_net(obs_t), dim=1).item())
+            else:
+                action, _ = model.predict(obs, deterministic=args.deterministic)
+                action = int(action)
+
             obs, reward, terminated, truncated, info = env.step(action)
             total_reward += reward
             total_collisions += info.get("collisions", 0)
@@ -150,9 +249,13 @@ def main() -> None:
         status = "✓ GOAL" if success else "✗ timeout"
         dist = info.get("distance_to_goal", -1)
         print(
-            f"  Episode {ep + 1:>3d}/{args.episodes} | {status} | "
-            f"Steps: {step:>4d} | Reward: {total_reward:>8.1f} | Dist: {dist:>6.1f} | "
-            f"Collisions: {total_collisions} | Near misses: {total_near_misses}"
+            f"  Episode {ep + 1:>3d}/{args.episodes} | "
+            f"{status} | "
+            f"Steps: {step:>4d} | "
+            f"Reward: {total_reward:>8.1f} | "
+            f"Dist: {dist:>6.1f} | "
+            f"Collisions: {total_collisions} | "
+            f"Near misses: {total_near_misses}"
         )
 
     env.close()
@@ -169,6 +272,14 @@ def main() -> None:
     print(f"  Avg intrusions:  {np.mean(episode_intrusions):.1f} ± {np.std(episode_intrusions):.1f}")
     print(f"  Avg slowdown:    {np.mean(episode_slowdown):.1f} ± {np.std(episode_slowdown):.1f}")
     print(f"  Avg blocking:    {np.mean(episode_blocking):.1f} ± {np.std(episode_blocking):.1f}")
+
+    if episode_successes and any(episode_successes):
+        success_idx = [i for i, s in enumerate(episode_successes) if s]
+        print(f"\n  Successful episodes ({len(success_idx)}):")
+        print(f"    Avg steps:     {np.mean([episode_lengths[i] for i in success_idx]):.0f}")
+        print(f"    Avg reward:    {np.mean([episode_rewards[i] for i in success_idx]):.1f}")
+        print(f"    Avg collisions: {np.mean([episode_collisions[i] for i in success_idx]):.1f}")
+        print(f"    Avg near misses: {np.mean([episode_near_misses[i] for i in success_idx]):.1f}")
     print()
 
 
