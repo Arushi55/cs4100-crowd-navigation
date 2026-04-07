@@ -3,7 +3,7 @@
 Pygame-based crowd navigation sandbox with two main pieces:
 
 - an interactive simulator for manually watching scenarios and pedestrian behavior
-- a Gymnasium RL environment for training DQN or PPO agents on the same maps
+- a Gymnasium RL environment for training DQN agents on the same maps
 
 The primary workflow is now the custom PyTorch DQN pipeline (`src/dqn.py`) with frame-stacked observations.
 
@@ -138,8 +138,6 @@ python src/dqn.py \
 python src/dqn.py --multi-scenario
 ```
 
-Optional legacy path: `src/train.py` still exists for SB3 PPO/DQN experiments, but it is no longer the primary workflow.
-
 ## Evaluate a trained model
 
 Main entrypoint:
@@ -205,8 +203,7 @@ The airport scenario now uses grouped edge-to-edge pedestrian traffic intended t
 ```text
 src/main.py                              # Interactive simulator
 src/crowd_env.py                         # Gymnasium crowd-navigation environment
-src/dqn.py                               # Primary custom PyTorch DQN trainer
-src/train.py                             # Optional legacy SB3 trainer
+src/dqn.py                               # Custom PyTorch DQN trainer
 src/evaluate.py                          # Model evaluation + pygame viewer
 src/benchmark.py                         # Batch benchmarking across counts/speeds
 src/multi_env.py                         # Variable-crowd and multi-scenario env wrappers

@@ -14,23 +14,13 @@ import numpy as np
 from crowd_env import ACTION_VECTORS, CrowdNavEnv
 from wrappers import ObservationStackWrapper
 
-SB3_ALGOS = ("dqn", "ppo")
-
-
 def parse_args() -> argparse.Namespace:
     p = argparse.ArgumentParser(description="Evaluate a trained crowd navigation agent")
     p.add_argument(
         "--model",
         type=str,
         default=None,
-        help="Path to model checkpoint (.zip for SB3, .pt for PyTorch DQN)",
-    )
-    p.add_argument(
-        "--algo",
-        type=str,
-        choices=sorted(SB3_ALGOS),
-        default=None,
-        help="Algorithm used to train the SB3 model (auto-detected when possible)",
+        help="Path to model checkpoint (.pt)",
     )
     p.add_argument(
         "--frame-stack",
@@ -43,12 +33,6 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--episodes", type=int, default=10, help="Number of episodes to run")
     p.add_argument("--max-steps", type=int, default=None, help="Max steps per episode")
     p.add_argument("--seed", type=int, default=123, help="Random seed")
-    p.add_argument(
-        "--deterministic",
-        action="store_true",
-        default=True,
-        help="Use deterministic actions for SB3 models",
-    )
     p.add_argument("--no-render", action="store_true", help="Disable rendering (for batch evaluation)")
     p.add_argument("--fps", type=int, default=30, help="Rendering FPS (lower = easier to watch)")
     p.add_argument("--save-metrics", type=str, default=None, help="Optional path to write per-episode CSV metrics")
@@ -76,17 +60,6 @@ def _parse_hidden_sizes(raw: object, default: tuple[int, ...] = (256, 256)) -> t
         values = [int(x) for x in raw]
         return tuple(values) if values else default
     return default
-
-
-def _load_sb3_algorithms() -> dict[str, type]:
-    try:
-        from stable_baselines3 import DQN, PPO
-    except Exception as exc:
-        raise RuntimeError(
-            "stable-baselines3 is required for evaluating .zip SB3 models. "
-            "Install it or evaluate a .pt DQN checkpoint instead."
-        ) from exc
-    return {"dqn": DQN, "ppo": PPO}
 
 
 def _safe_div(num: float, denom: float) -> float:
@@ -131,15 +104,12 @@ def main() -> None:
         model_path = repo_root / "training_output" / "dqn" / "dqn.pt"
 
     if not model_path.exists():
-        alt_zip = model_path.with_suffix(".zip")
         alt_pt = model_path.with_suffix(".pt")
-        if alt_zip.exists():
-            model_path = alt_zip
-        elif alt_pt.exists():
+        if alt_pt.exists():
             model_path = alt_pt
         else:
             print(f"  Error: Model not found at {model_path}")
-            print("  Train a model first:  python src/train.py  or  python src/dqn.py")
+            print("  Train a model first:  python src/dqn.py")
             sys.exit(1)
 
     run_config = load_run_config(model_path)
@@ -151,17 +121,11 @@ def main() -> None:
         run_config.get("max_steps", run_config.get("max_episode_steps", 1000))
     )
 
-    is_torch_dqn_checkpoint = model_path.suffix == ".pt"
-    algo_name = args.algo or run_config.get("algo", "dqn")
-
     print("=" * 60)
     print("  Crowd Navigation — Agent Evaluation")
     print("=" * 60)
     print(f"  Model:       {model_path}")
-    if is_torch_dqn_checkpoint:
-        print("  Algorithm:   DQN (PyTorch)")
-    else:
-        print(f"  Algorithm:   {algo_name.upper()}")
+    print("  Algorithm:   DQN (PyTorch)")
     print(f"  Frame stack: {frame_stack}")
     print(f"  Scenario:    {scenario}")
     print(f"  Pedestrians: {pedestrians}")
@@ -181,53 +145,33 @@ def main() -> None:
         env = ObservationStackWrapper(env, stack_size=frame_stack)
     env.metadata["render_fps"] = args.fps
 
-    model = None
-    q_net = None
-    device = None
+    try:
+        import torch
+        from dqn import QNetwork
+    except Exception as exc:
+        env.close()
+        print(f"  Error loading PyTorch DQN dependencies: {exc}")
+        print("  Install dependencies from requirements.txt and retry.")
+        sys.exit(1)
 
-    if is_torch_dqn_checkpoint:
-        try:
-            import torch
-            from dqn import QNetwork
-        except Exception as exc:
-            env.close()
-            print(f"  Error loading PyTorch DQN dependencies: {exc}")
-            print("  Install dependencies from src/requirements.txt and retry.")
-            sys.exit(1)
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    obs_dim = int(np.prod(env.observation_space.shape))
+    action_dim = env.action_space.n
+    checkpoint = torch.load(model_path, map_location=device)
 
-        device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-        obs_dim = int(np.prod(env.observation_space.shape))
-        action_dim = env.action_space.n
-        checkpoint = torch.load(model_path, map_location=device)
+    hidden_sizes = _parse_hidden_sizes(run_config.get("hidden_sizes", "256,256"))
+    activation = str(run_config.get("hidden_activation", "relu"))
+    dueling = bool(run_config.get("dueling_dqn", False))
 
-        hidden_sizes = _parse_hidden_sizes(run_config.get("hidden_sizes", "256,256"))
-        activation = str(run_config.get("hidden_activation", "relu"))
-        dueling = bool(run_config.get("dueling_dqn", False))
-
-        q_net = QNetwork(
-            obs_dim,
-            action_dim,
-            hidden_sizes=hidden_sizes,
-            activation=activation,
-            dueling=dueling,
-        ).to(device)
-        q_net.load_state_dict(checkpoint["q_net"])
-        q_net.eval()
-    else:
-        try:
-            algorithms = _load_sb3_algorithms()
-        except RuntimeError as exc:
-            env.close()
-            print(f"  Error: {exc}")
-            sys.exit(1)
-
-        model_cls = algorithms.get(algo_name)
-        if model_cls is None:
-            env.close()
-            print(f"  Error: unsupported algorithm '{algo_name}'.")
-            print(f"  Supported SB3 algorithms: {', '.join(sorted(algorithms.keys()))}")
-            sys.exit(1)
-        model = model_cls.load(str(model_path))
+    q_net = QNetwork(
+        obs_dim,
+        action_dim,
+        hidden_sizes=hidden_sizes,
+        activation=activation,
+        dueling=dueling,
+    ).to(device)
+    q_net.load_state_dict(checkpoint["q_net"])
+    q_net.eval()
 
     episode_rewards = []
     episode_lengths = []
@@ -271,12 +215,8 @@ def main() -> None:
         step = 0
 
         while not done:
-            if is_torch_dqn_checkpoint:
-                obs_t = torch.as_tensor(obs, device=device, dtype=torch.float32).unsqueeze(0)
-                action = int(torch.argmax(q_net(obs_t), dim=1).item())
-            else:
-                action, _ = model.predict(obs, deterministic=args.deterministic)
-                action = int(action)
+            obs_t = torch.as_tensor(obs, device=device, dtype=torch.float32).unsqueeze(0)
+            action = int(torch.argmax(q_net(obs_t), dim=1).item())
 
             if prev_action is not None and action != prev_action:
                 action_switches += 1
