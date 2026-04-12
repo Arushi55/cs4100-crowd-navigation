@@ -36,6 +36,24 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--total-steps", type=int, default=500_000, help="Training steps per scenario.")
     p.add_argument("--pedestrians-min", type=int, default=0, help="Minimum pedestrians during training.")
     p.add_argument("--pedestrians-max", type=int, default=100, help="Maximum pedestrians during training.")
+    p.add_argument(
+        "--ped-count-anchors",
+        type=str,
+        default="0,30,100",
+        help="Comma-separated anchor counts to bias around while still mixing uniform samples.",
+    )
+    p.add_argument(
+        "--ped-count-anchor-prob",
+        type=float,
+        default=0.65,
+        help="Probability of sampling near an anchor count (remaining samples are uniform).",
+    )
+    p.add_argument(
+        "--ped-count-anchor-jitter",
+        type=int,
+        default=8,
+        help="Integer jitter (+/-) around sampled anchor counts.",
+    )
     p.add_argument("--ped-speed-min", type=float, default=0.95, help="Minimum pedestrian speed multiplier.")
     p.add_argument("--ped-speed-max", type=float, default=1.15, help="Maximum pedestrian speed multiplier.")
     p.add_argument("--frame-stack", type=int, default=4, help="Observation stack depth.")
@@ -110,6 +128,12 @@ def train_scenario(args: argparse.Namespace, repo_root: Path, scenario: str, mod
         str(args.pedestrians_min),
         "--pedestrians-max",
         str(args.pedestrians_max),
+        "--ped-count-anchors",
+        str(args.ped_count_anchors),
+        "--ped-count-anchor-prob",
+        str(args.ped_count_anchor_prob),
+        "--ped-count-anchor-jitter",
+        str(args.ped_count_anchor_jitter),
         "--ped-speed-min",
         str(args.ped_speed_min),
         "--ped-speed-max",
@@ -182,6 +206,13 @@ def main() -> None:
     print("=== DQN Experiment Harness ===")
     print(f"Scenarios: {', '.join(args.scenarios)}")
     print(f"Eval pedestrian counts: {args.eval_pedestrians}")
+    print(
+        "Ped-count sampling: "
+        f"range=[{args.pedestrians_min},{args.pedestrians_max}], "
+        f"anchors={args.ped_count_anchors!r}, "
+        f"anchor_prob={args.ped_count_anchor_prob}, "
+        f"anchor_jitter=+/-{args.ped_count_anchor_jitter}"
+    )
     print(f"Train output root: {train_output_root}")
     print(f"Results dir: {results_dir}")
 

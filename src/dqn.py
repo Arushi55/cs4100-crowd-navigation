@@ -201,10 +201,34 @@ class QNetwork(nn.Module):
 # ---------------------------------------------------------------------------
 # Environment helpers
 # ---------------------------------------------------------------------------
+def _parse_anchor_counts(raw: str) -> tuple[int, ...]:
+    text = str(raw).strip()
+    if not text:
+        return ()
+    values: list[int] = []
+    for token in text.split(","):
+        token = token.strip()
+        if not token:
+            continue
+        values.append(int(token))
+    # Preserve order but remove duplicates.
+    seen: set[int] = set()
+    deduped: list[int] = []
+    for v in values:
+        if v not in seen:
+            seen.add(v)
+            deduped.append(v)
+    return tuple(deduped)
+
+
 def make_base_env(args: argparse.Namespace, seed: int, render_mode: str | None = None):
+    ped_count_anchors = _parse_anchor_counts(args.ped_count_anchors)
     if args.multi_scenario:
         return MultiScenarioEnv(
             ped_count_range=(args.pedestrians_min, args.pedestrians_max),
+            ped_count_anchors=ped_count_anchors,
+            ped_count_anchor_prob=args.ped_count_anchor_prob,
+            ped_count_anchor_jitter=args.ped_count_anchor_jitter,
             speed_range=(args.ped_speed_min, args.ped_speed_max),
             max_steps=args.max_steps,
             seed=seed,
@@ -214,6 +238,9 @@ def make_base_env(args: argparse.Namespace, seed: int, render_mode: str | None =
         return VariablePedestrianEnv(
             scenario_id=args.scenario,
             ped_count_range=(args.pedestrians_min, args.pedestrians_max),
+            ped_count_anchors=ped_count_anchors,
+            ped_count_anchor_prob=args.ped_count_anchor_prob,
+            ped_count_anchor_jitter=args.ped_count_anchor_jitter,
             speed_range=(args.ped_speed_min, args.ped_speed_max),
             max_steps=args.max_steps,
             seed=seed,
@@ -245,6 +272,9 @@ def save_run_config(output_dir: Path, args: argparse.Namespace) -> None:
         "vary_pedestrians": args.vary_pedestrians,
         "pedestrians_min": args.pedestrians_min,
         "pedestrians_max": args.pedestrians_max,
+        "ped_count_anchors": args.ped_count_anchors,
+        "ped_count_anchor_prob": args.ped_count_anchor_prob,
+        "ped_count_anchor_jitter": args.ped_count_anchor_jitter,
         "ped_speed_min": args.ped_speed_min,
         "ped_speed_max": args.ped_speed_max,
         "max_steps": args.max_steps,
@@ -495,6 +525,24 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--vary-pedestrians", action="store_true", help="Randomize pedestrian count/speed each episode in a single scenario")
     p.add_argument("--pedestrians-min", type=int, default=6, help="Min pedestrian count when varying")
     p.add_argument("--pedestrians-max", type=int, default=20, help="Max pedestrian count when varying")
+    p.add_argument(
+        "--ped-count-anchors",
+        type=str,
+        default="",
+        help="Comma-separated anchor pedestrian counts for biased sampling (e.g., 0,30,100)",
+    )
+    p.add_argument(
+        "--ped-count-anchor-prob",
+        type=float,
+        default=0.0,
+        help="Probability of sampling near an anchor count instead of uniform range",
+    )
+    p.add_argument(
+        "--ped-count-anchor-jitter",
+        type=int,
+        default=5,
+        help="Integer jitter (+/-) applied around sampled anchor counts",
+    )
     p.add_argument("--ped-speed-min", type=float, default=1.0, help="Min pedestrian speed multiplier when varying")
     p.add_argument("--ped-speed-max", type=float, default=2.5, help="Max pedestrian speed multiplier when varying")
     p.add_argument("--total-steps", type=int, default=200_000, help="Total training steps")

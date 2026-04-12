@@ -105,6 +105,8 @@ class CrowdNavEnv(gym.Env):
         self.wall_penalty_radius = 22.0
         self.wall_penalty_scale = -0.44
         self.wall_scrape_penalty = -1.1
+        self.boundary_penalty_min_factor = 0.35
+        self.boundary_penalty_relax_radius_scale = 4.0
         self.wall_approach_radius = 56.0
         self.wall_approach_scale = -0.35
         self.action_smoothing = 0.2
@@ -470,10 +472,29 @@ class CrowdNavEnv(gym.Env):
         reward += penalty_scale * self._wall_approach_penalty()
         reward += self._last_turn_penalty
 
-        nearest_wall = self._nearest_wall_distance()
-        if nearest_wall < self.wall_penalty_radius:
-            wall_closeness = 1.0 - (nearest_wall / self.wall_penalty_radius)
-            reward += penalty_scale * self.wall_penalty_scale * (wall_closeness ** 2)
+        boundary_dist = self._boundary_distance()
+        if boundary_dist < self.wall_penalty_radius:
+            boundary_closeness = 1.0 - (boundary_dist / self.wall_penalty_radius)
+            relax_radius = self._goal_contact_radius() * self.boundary_penalty_relax_radius_scale
+            if relax_radius > 1e-6:
+                goal_ratio = float(np.clip(dist_to_goal / relax_radius, 0.0, 1.0))
+            else:
+                goal_ratio = 1.0
+            boundary_factor = (
+                self.boundary_penalty_min_factor
+                + (1.0 - self.boundary_penalty_min_factor) * goal_ratio
+            )
+            reward += (
+                penalty_scale
+                * boundary_factor
+                * self.wall_penalty_scale
+                * (boundary_closeness ** 2)
+            )
+
+        nearest_obstacle = self._nearest_obstacle_distance()
+        if nearest_obstacle < self.wall_penalty_radius:
+            obstacle_closeness = 1.0 - (nearest_obstacle / self.wall_penalty_radius)
+            reward += penalty_scale * self.wall_penalty_scale * (obstacle_closeness ** 2)
         if self._last_blocked_axes:
             reward += penalty_scale * self.wall_scrape_penalty * self._last_blocked_axes
 
@@ -680,13 +701,15 @@ class CrowdNavEnv(gym.Env):
 
         return self.wall_approach_scale * pressure * (1.0 + 0.12 * (forward_hits - 1))
 
-    def _nearest_wall_distance(self) -> float:
-        boundary_dist = min(
+    def _boundary_distance(self) -> float:
+        return min(
             self.robot.x - self.robot.radius,
             WIDTH - self.robot.radius - self.robot.x,
             self.robot.y - self.robot.radius,
             HEIGHT - self.robot.radius - self.robot.y,
         )
+
+    def _nearest_obstacle_distance(self) -> float:
         obstacle_dist = float("inf")
         for rect in self.scenario.obstacles:
             closest_x = max(rect.left, min(self.robot.x, rect.right))
@@ -695,7 +718,10 @@ class CrowdNavEnv(gym.Env):
                 obstacle_dist,
                 np.hypot(self.robot.x - closest_x, self.robot.y - closest_y) - self.robot.radius,
             )
-        return max(0.0, min(boundary_dist, obstacle_dist))
+        return max(0.0, obstacle_dist)
+
+    def _nearest_wall_distance(self) -> float:
+        return min(self._boundary_distance(), self._nearest_obstacle_distance())
 
     def _count_collisions(self) -> int:
         """Count how many pedestrians the robot is currently colliding with."""

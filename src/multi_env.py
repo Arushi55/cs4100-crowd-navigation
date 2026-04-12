@@ -8,6 +8,33 @@ import numpy as np
 from crowd_env import CrowdNavEnv
 
 
+def _sample_pedestrian_count(
+    rng: np.random.Generator,
+    ped_count_range: tuple[int, int],
+    anchors: tuple[int, ...],
+    anchor_prob: float,
+    anchor_jitter: int,
+) -> int:
+    lo, hi = ped_count_range
+    if lo > hi:
+        lo, hi = hi, lo
+
+    valid_anchors = tuple(a for a in anchors if lo <= a <= hi)
+    use_anchor = (
+        bool(valid_anchors)
+        and anchor_prob > 0.0
+        and float(rng.random()) < min(1.0, max(0.0, anchor_prob))
+    )
+    if use_anchor:
+        center = int(rng.choice(valid_anchors))
+        jitter = max(0, int(anchor_jitter))
+        if jitter > 0:
+            center += int(rng.integers(-jitter, jitter + 1))
+        return max(lo, min(hi, center))
+
+    return int(rng.integers(lo, hi + 1))
+
+
 class VariablePedestrianEnv(gym.Env):
     """
     Wraps CrowdNavEnv for a single fixed scenario while randomizing pedestrian
@@ -20,6 +47,9 @@ class VariablePedestrianEnv(gym.Env):
         self,
         scenario_id: str = "airport",
         ped_count_range: tuple[int, int] = (6, 20),
+        ped_count_anchors: tuple[int, ...] = (),
+        ped_count_anchor_prob: float = 0.0,
+        ped_count_anchor_jitter: int = 5,
         speed_range: tuple[float, float] = (1.0, 1.0),
         max_steps: int = 1200,
         seed: int | None = None,
@@ -29,6 +59,9 @@ class VariablePedestrianEnv(gym.Env):
 
         self.scenario_id = scenario_id
         self.ped_count_range = ped_count_range
+        self.ped_count_anchors = tuple(int(a) for a in ped_count_anchors)
+        self.ped_count_anchor_prob = float(ped_count_anchor_prob)
+        self.ped_count_anchor_jitter = int(ped_count_anchor_jitter)
         self.speed_range = speed_range
         self.max_steps = max_steps
         self.render_mode = render_mode
@@ -48,8 +81,12 @@ class VariablePedestrianEnv(gym.Env):
         if seed is not None:
             self.rng = np.random.default_rng(seed)
 
-        n_peds = int(
-            self.rng.integers(self.ped_count_range[0], self.ped_count_range[1] + 1)
+        n_peds = _sample_pedestrian_count(
+            self.rng,
+            self.ped_count_range,
+            self.ped_count_anchors,
+            self.ped_count_anchor_prob,
+            self.ped_count_anchor_jitter,
         )
         speed_mult = float(self.rng.uniform(self.speed_range[0], self.speed_range[1]))
 
@@ -110,6 +147,9 @@ class MultiScenarioEnv(gym.Env):
         self,
         scenarios: list[str] | None = None,
         ped_count_range: tuple[int, int] = (6, 20),
+        ped_count_anchors: tuple[int, ...] = (),
+        ped_count_anchor_prob: float = 0.0,
+        ped_count_anchor_jitter: int = 5,
         speed_range: tuple[float, float] = (1.0, 2.5),
         max_steps: int = 1200,
         seed: int | None = None,
@@ -119,6 +159,9 @@ class MultiScenarioEnv(gym.Env):
 
         self.scenarios = scenarios or ["airport", "home", "shopping_center"]
         self.ped_count_range = ped_count_range
+        self.ped_count_anchors = tuple(int(a) for a in ped_count_anchors)
+        self.ped_count_anchor_prob = float(ped_count_anchor_prob)
+        self.ped_count_anchor_jitter = int(ped_count_anchor_jitter)
         self.speed_range = speed_range
         self.max_steps = max_steps
         self.render_mode = render_mode
@@ -141,7 +184,13 @@ class MultiScenarioEnv(gym.Env):
 
         # Randomize configuration
         scenario = self.rng.choice(self.scenarios)
-        n_peds = int(self.rng.integers(self.ped_count_range[0], self.ped_count_range[1] + 1))
+        n_peds = _sample_pedestrian_count(
+            self.rng,
+            self.ped_count_range,
+            self.ped_count_anchors,
+            self.ped_count_anchor_prob,
+            self.ped_count_anchor_jitter,
+        )
         speed_mult = float(self.rng.uniform(self.speed_range[0], self.speed_range[1]))
 
         # Close old env and create new one with randomized config
