@@ -13,12 +13,14 @@ This project studies the trade-off explicitly:
 > Is it worth accepting a social penalty (getting too close to people) to increase destination success and speed?
 
 ### Core Goal
-Build and compare multiple crowd-navigation policies in partially observable simulation environments, then evaluate performance with consistent metrics:
+Build and evaluate a crowd-navigation policy in partially observable simulation environments, measuring performance with consistent metrics:
 
-- time-to-goal (or steps-to-goal)
+- time-to-goal (steps-to-goal)
 - collisions/overlaps
 - proxemic intrusions (personal-space violations)
-- aggregate reward/penalty
+- near misses
+- pedestrian slowdown caused by the robot
+- aggregate reward
 
 ---
 
@@ -27,51 +29,79 @@ Build and compare multiple crowd-navigation policies in partially observable sim
 - **GitHub repo**: `https://github.com/Arushi55/cs4100-crowd-navigation`
 - **Default branch**: `main`
 - **Current structure**:
-  - `src/main.py` (pygame simulation loop, penalties, episodes)
-  - `src/agent/behaviors.py` (manual, naive, random, potential-field policies)
-  - `src/environment/pedestrian.py` (social-force-like pedestrian dynamics)
-  - `src/environment/robot.py` (robot state and movement)
-  - `src/constants.py` (simulation dimensions)
-  - `tests/test_smoke.py` (very minimal smoke test)
 
-### Important Current-State Notes
+```text
+src/main.py                              # Interactive simulator
+src/crowd_env.py                         # Gymnasium crowd-navigation environment
+src/dqn.py                               # Custom PyTorch DQN trainer
+src/evaluate.py                          # Model evaluation + pygame viewer
+src/benchmark.py                         # Batch benchmarking across counts/speeds
+src/multi_env.py                         # Variable-crowd and multi-scenario env wrappers
+src/wrappers.py                          # Observation frame stacking
+src/constants.py                         # Shared dimensions/constants
+src/agent/behaviors.py                   # Robot control policies for simulator mode
+src/agent/sensor.py                      # Ray sensor and visualization
+src/environment/robot.py                 # Robot movement and collision handling
+src/environment/pedestrian.py            # Pedestrian state, pathing, waypoint steering
+src/environment/behaviors.py             # Pedestrian behavior models, including family groups
+src/environment/pathfinding.py           # A* navigation grid
+src/environment/scenarios.py             # Scenario loading and pedestrian generation
+src/environment/scenario_configs/*.json  # Scenario configs (airport, home, shopping_center)
+```
 
-1. **Simulation is functional and already supports multiple control modes**:
-   - `MANUAL`
-   - `NAIVE` (goal-seeking only)
-   - `RANDOM`
-   - `POTENTIAL_FIELD` (goal attraction + pedestrian repulsion)
+### What Is Implemented
 
-2. **Penalty shaping is present**:
-   - Near-distance penalty for entering a close radius
-   - Tiered overlap penalties based on collision depth
+1. **Three scenarios**: `airport`, `home`, `shopping_center`, each with distinct layouts, spawn points, and pedestrian flow patterns.
 
-3. **Episode tracking exists**:
-   - Per-episode penalty and step counts
-   - Running averages printed to console
+2. **Custom PyTorch DQN** (`src/dqn.py`):
+   - Dueling DQN architecture
+   - Double DQN target computation
+   - Prioritized experience replay (PER)
+   - N-step returns
+   - Frame-stacked observations (configurable stack size)
+   - Configurable epsilon schedules (linear, exponential, cosine, constant)
+   - Configurable hidden sizes, activations, optimizers, and loss functions
 
-4. **Pedestrian behavior includes social-force components**:
-   - self-driving force toward goal
-   - pedestrian-pedestrian repulsion
-   - optional wall repulsion terms (currently set so wall force has no effect)
+3. **Observation space** (per frame):
+   - Robot and goal positions (normalized)
+   - 36-ray full-circle sensor (distance + hit type per ray)
+   - Nearest 6 visible pedestrians: relative position, velocity, distance
 
-5. **Docs/setup mismatch exists**:
-   - `README.md` references package paths/extras (`crowd_navigation`, `pyproject.toml`, `requirements-dev.txt`) that are not currently present in the repository snapshot.
+4. **Reward shaping**:
+   - Progress toward goal (distance delta)
+   - Goal contact (+1000 terminal)
+   - Timeout penalty
+   - Collision, personal-space, near-miss, caution-zone penalties
+   - Crowd pressure and crowd approach penalties
+   - Wall proximity and wall scrape penalties
+   - Turn/smoothness penalty
+   - Near-goal penalty blending (social penalties scale down as agent approaches goal)
+   - No-progress stagnation penalty
+
+5. **Training modes**:
+   - Fixed single scenario with fixed pedestrian count
+   - Single scenario with variable pedestrian count and speed each episode
+   - Multi-scenario (randomizes across all scenarios each episode)
+
+6. **Evaluation and benchmarking** (`src/evaluate.py`, `src/benchmark.py`):
+   - Per-episode metrics: success, steps, reward, collisions, near misses, intrusions, slowdown, blocking, wall contacts, path efficiency
+   - Benchmark sweeps across pedestrian counts and speeds
 
 ---
 
-## 3) Commit-History Milestones (Observed)
-
-Recent commits indicate this progression:
+## 3) Commit-History Milestones
 
 1. Initial project scaffold and pygame startup
 2. Refactor into separate classes/modules
 3. Add penalties for proximity/collision
-4. Add social-force pedestrians
+4. Add social-force pedestrian behavior
 5. Add goal detection, multiple control modes, and episode metrics
-6. Structural reorganization and mode documentation
-
-This is a solid base for moving into proper experiment design and reproducible benchmarking.
+6. Structural reorganization into current module layout
+7. Gymnasium environment (`crowd_env.py`) with ray sensor and frame stacking
+8. Custom PyTorch DQN with prioritized replay, dueling/double DQN, n-step returns
+9. Multi-scenario and variable-pedestrian environment wrappers
+10. Improved pedestrian behavior (family groups, flow patterns)
+11. Reward refinements: near-goal penalty blending, no-progress penalty, social shaping tuning
 
 ---
 
@@ -95,174 +125,75 @@ This is a solid base for moving into proper experiment design and reproducible b
 
 - **Proxemic distance definitions**:
   - `https://pmc.ncbi.nlm.nih.gov/articles/PMC7918518/`
-  - Can ground intrusion metrics in established distance zones.
+  - Grounds intrusion metrics in established intimate/personal/social/public distance zones.
 
 ---
 
-## 5) Proposed Evaluation Framing
+## 5) Evaluation Framing
 
-To answer the central trade-off question, evaluate each policy under identical scenarios with fixed random seeds:
+Each policy is evaluated under identical scenarios with fixed random seeds:
 
 - **Success rate**: percentage of episodes reaching goal before timeout
-- **Efficiency**: steps/time to goal
-- **Safety**: collision count and overlap severity
-- **Social compliance**: proxemic intrusion count/duration
-- **Composite score**: weighted objective to explore trade-offs
+- **Efficiency**: steps to goal
+- **Safety**: collision count
+- **Social compliance**: near-miss count, personal-space intrusion count/duration, pedestrian slowdown caused
+- **Path efficiency**: actual path length / shortest path length
 
-### Recommended Objective Template
+### Objective Template
 
-Use a tunable objective so you can run ablations over social cost weights:
+Use a tunable composite score for ablation sweeps over social cost weights:
 
 `score = w_goal * goal_reached - w_time * steps - w_collision * overlaps - w_intrusion * intrusion_time`
 
-Run sweeps over `w_intrusion`/`w_collision` to quantify when social penalties meaningfully improve or hurt mission success.
+---
+
+## 6) Scenario Descriptions
+
+### airport
+Edge-to-edge family-group pedestrian flow across a large concourse with obstacles. Intended to simulate families moving through a busy terminal.
+
+### home
+Residential layout with smaller rooms and tighter corridors. Variable pedestrian count (12–50) at moderate speed.
+
+### shopping_center
+Open floor plan with scattered obstacles and bidirectional pedestrian traffic.
 
 ---
 
-## 6) Scenario Plan (Controlled Environments)
+## 7) Current Next Steps
 
-Start with a small suite of reproducible scenarios:
+### Research / Evaluation
+1. **Run multi-seed evaluation** across all three scenarios at varying pedestrian counts (0, 12, 30, 50+) to produce reportable results.
+2. **Ablation on social-penalty weights** — sweep `blocking_penalty_scale`, `personal_space_penalty`, `crowd_approach_scale` to quantify the efficiency/safety trade-off.
+3. **Compare training modes** — fixed vs. variable-crowd vs. multi-scenario on generalization.
+4. **Add hand-crafted baselines** for comparison:
+   - Naive goal-seeking (already in simulator)
+   - Potential field (already in simulator)
+   - Consider RVO/ORCA integration as a stronger baseline
 
-1. **Hallway Flow**
-   - Bidirectional pedestrian traffic through a corridor.
-
-2. **Bottleneck / Doorway**
-   - Dense crossing region where robot must choose between waiting and squeezing.
-
-3. **Intersection**
-   - Perpendicular streams of pedestrians.
-
-4. **Sparse-to-Dense Transition**
-   - Robot starts in open space and enters denser crowd zone.
-
-For each scenario, define:
-- map geometry
-- pedestrian spawn/goal distributions
-- episode timeout
-- random seed protocol
+### Engineering
+5. **Save per-episode metrics to CSV** during `evaluate.py` runs (flag already exists: `--save-metrics`) and build a summary analysis script.
+6. **Multi-seed training sweeps** — train N seeds per config, report mean ± std.
 
 ---
 
-## 7) Policy/Baseline Roadmap
-
-Near-term baselines:
-
-1. **Manual** (human-control reference)
-2. **Naive goal-seeking**
-3. **Random**
-4. **Potential field** (already implemented)
-5. **RVO/ORCA-style baseline** (planned; external integration)
-
-Mid-term learning baselines:
-
-6. **Simple RL baseline** (e.g., PPO with partial observations)
-7. **Structured recurrent policy** (DS-RNN-inspired architecture)
-
----
-
-## 8) Immediate Next To-Dos (Priority Ordered)
-
-### P0 (Do Next)
-
-1. **Fix and align documentation to actual repo**
-   - Update `README.md` commands/paths to match current source layout.
-   - Add a short "how to run experiments" section once logging exists.
-
-2. **Add reproducible experiment configuration**
-   - Centralize parameters (seed, pedestrian count, penalty weights, timeout, mode).
-   - Ensure deterministic seeding for `random` (and `numpy` later if added).
-
-3. **Implement structured metrics logging**
-   - Save per-episode metrics to CSV/JSON instead of only printing.
-   - Include mode, scenario, seed, success, steps, penalties, collisions, intrusions.
-
-4. **Create scenario abstraction**
-   - Replace hardcoded spawn/goal logic with named scenario configs.
-   - Allow running N episodes per scenario/mode from CLI flags.
-
-5. **Add stronger tests**
-   - Keep smoke test, then add unit tests for:
-     - penalty calculation tiers
-     - goal detection/reset behavior
-     - deterministic episode setup with fixed seeds
-
-### P1 (Next After P0)
-
-6. **Define proxemic zones explicitly**
-   - Add intimate/personal/social/public thresholds in constants.
-   - Track intrusion count and cumulative intrusion time by zone.
-
-7. **Refactor reward/penalty into a dedicated module**
-   - Keep environment dynamics and scoring separated for easier ablations.
-
-8. **Build a lightweight analysis notebook/script**
-   - Compare policies across scenarios with summary tables and plots.
-
-### P2 (Research Expansion)
-
-9. **Integrate RVO2/ORCA baseline**
-10. **Introduce partial observability sensor model**
-11. **Add RL training pipeline and compare against hand-crafted baselines**
-12. **Run sensitivity studies on social-penalty weights**
-
----
-
-## 9) Suggested Team Workflow
-
-- Use short feature branches per milestone (`metrics-logging`, `scenario-config`, etc.).
-- Require one reproducibility check before merge:
-  - same seed, same config, stable aggregate metrics within tolerance.
-- Track all experiment runs with:
-  - git commit hash
-  - scenario id
-  - control mode
-  - seed
-  - metric outputs
-
----
-
-## 10) Risks and Mitigations
+## 8) Risks and Mitigations
 
 1. **Metric drift / inconsistent definitions**
-   - Mitigation: formal metric schema and tests for metric calculations.
+   - Mitigation: formal metric schema; use `evaluate.py` consistently across all comparisons.
 
 2. **Non-reproducible experiments**
-   - Mitigation: mandatory seeding and config snapshots in result files.
+   - Mitigation: `run_config.json` is saved with every training run; always pass `--seed`.
 
 3. **Overfitting to one crowd pattern**
-   - Mitigation: evaluate across multiple scenario families and densities.
+   - Mitigation: use `--vary-pedestrians` or `--multi-scenario` during training; evaluate out-of-distribution.
 
 4. **Performance claims without statistical support**
-   - Mitigation: run multiple seeds and report mean + variance/confidence intervals.
+   - Mitigation: run multiple seeds and report mean + variance.
 
 ---
 
-## 11) Definition of "Good Progress" (Short-Term)
-
-You are in a strong position if, within the next milestone, you can:
-
-- run at least 3 scenarios x 4 policies x 10 seeds automatically
-- produce a results file for each run
-- generate one summary comparison table
-- answer the key question with initial evidence:
-  - how much goal efficiency improves or degrades as social penalties are increased
-
----
-
-## 12) Open Questions to Finalize as a Team
-
-1. What exact penalty weights define your default objective?
-2. What episode timeout defines failure?
-3. How many pedestrians and what density levels are in the first benchmark suite?
-4. Which comparison is your minimum viable "reportable result" for class milestones?
-
-Answering these will let you lock a v1 benchmark protocol and move from coding to measurable research iterations.
-
----
-
-## 13) Project Tracker: Individual Contributions (Commit-Graph Based)
-
-This section satisfies the requirement to show individual contributions via commit history.
+## 9) Project Tracker: Individual Contributions (Commit-Graph Based)
 
 ### Identity Normalization Note
 
@@ -275,34 +206,23 @@ For project tracking, these are treated as the same contributor.
 
 ### Contribution Summary by Contributor
 
-1. **efsmert** (`samiareski05@gmail.com`) - 3 commits
-   - Initial project setup and first commit
-   - Brought up pygame simulation with baseline crowd/room/start-end behavior
-   - Added repository hygiene updates (`.gitignore`)
-   - Representative commits: `050b8ee`, `021e1d5`, `3ea89f1`
+1. **efsmert** (`samiareski05@gmail.com`)
+   - Initial project setup and pygame simulation with baseline crowd/room/start-end behavior
+   - Repository hygiene (.gitignore)
 
-2. **Arushi Aggarwal** (`arushi3.14@outlook.com`) - 2 commits
+2. **Arushi Aggarwal** (`arushi3.14@outlook.com`)
    - Refactored simulation into separate classes/modules
    - Added penalty logic to scoring behavior
-   - Representative commits: `ea436aa`, `6f8d416`
+   - Gymnasium environment, DQN training pipeline, evaluation and benchmark scripts
+   - Reward shaping, multi-scenario wrappers, pedestrian improvements
 
-3. **Dharma (phisomni / phisomni-edu)** (`dharma.ar@northeastern.edu`) - 5 commits total (incl. merge)
-   - Added goal detection and multi-mode control behavior
-   - Added autonomous behavior set and episode metrics support
-   - Led structural reorganization to current module layout (`src/agent`, `src/environment`, `src/main.py`)
-   - Added control-mode documentation in main loop
-   - Representative commits: `0f1d7a0`, `4710b6d`, `d590db8`, `a5d13d1`, `d9e2454` (merge)
+3. **Dharma (phisomni / phisomni-edu)** (`dharma.ar@northeastern.edu`)
+   - Goal detection and multi-mode control behavior
+   - Autonomous behavior set and episode metrics support
+   - Structural reorganization to current module layout (`src/agent`, `src/environment`, `src/main.py`)
 
-4. **Lisa W** (`wan.lis@northeastern.edu`) - 1 commit
-   - Added social-force pedestrian behavior integration
-   - Representative commit: `284cc15`
-
-### Scope Mapping (Who Owned What)
-
-- **Core bootstrapping + initial runnable sim**: efsmert
-- **Refactor + penalty model**: Arushi Aggarwal
-- **Behavior modes + goal/episode metrics + structural reorg**: Dharma
-- **Social-force pedestrian dynamics**: Lisa W
+4. **Lisa W** (`wan.lis@northeastern.edu`)
+   - Social-force pedestrian behavior integration
 
 ### Tracker Maintenance Rule (Going Forward)
 
@@ -312,4 +232,4 @@ At each milestone, append:
 - commit hashes merged in milestone
 - short description of net contribution
 
-This keeps individual-contribution evidence synchronized with the evolving codebase and avoids reconstructing it at report time.
+This keeps individual-contribution evidence synchronized with the evolving codebase.
