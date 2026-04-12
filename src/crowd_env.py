@@ -135,6 +135,7 @@ class CrowdNavEnv(gym.Env):
         self.goal_pos: tuple[float, float] | None = None
         self.current_step = 0
         self._prev_dist_to_goal = 0.0      # for progress-based shaping
+        self._prev_path_dist_to_goal = 0.0
         self._episode_near_misses = 0
         self._episode_personal_space_intrusions = 0
         self._episode_pedestrian_slowdown = 0.0
@@ -178,6 +179,7 @@ class CrowdNavEnv(gym.Env):
             self.robot.x - self.goal_pos[0],
             self.robot.y - self.goal_pos[1],
         )
+        self._prev_path_dist_to_goal = self._path_distance_to_goal(self._prev_dist_to_goal)
         self._episode_near_misses = 0
         self._episode_personal_space_intrusions = 0
         self._episode_pedestrian_slowdown = 0.0
@@ -253,8 +255,9 @@ class CrowdNavEnv(gym.Env):
             self.robot.x - self.goal_pos[0],
             self.robot.y - self.goal_pos[1],
         )
+        path_dist_to_goal = self._path_distance_to_goal(dist_to_goal)
         
-        reward = self._compute_reward(dist_to_goal)
+        reward = self._compute_reward(dist_to_goal, path_dist_to_goal)
         
         terminated = dist_to_goal <= self._goal_contact_radius()
         truncated = self.current_step >= self.max_steps
@@ -272,6 +275,7 @@ class CrowdNavEnv(gym.Env):
         self._episode_wall_contacts += self._last_blocked_axes
         
         self._prev_dist_to_goal = dist_to_goal
+        self._prev_path_dist_to_goal = path_dist_to_goal
         
         observation = self._get_observation()
         info = {
@@ -409,7 +413,7 @@ class CrowdNavEnv(gym.Env):
         sharpness = 0.5 * (1.0 - alignment)
         return self.turn_penalty_scale * (sharpness ** 2)
 
-    def _compute_reward(self, dist_to_goal: float) -> float:
+    def _compute_reward(self, dist_to_goal: float, path_dist_to_goal: float) -> float:
         """compute step reward (goal reward added separately in step())."""
         reward = self.step_penalty
 
@@ -425,8 +429,9 @@ class CrowdNavEnv(gym.Env):
         if in_near_goal_zone:
             reward += self.near_goal_proximity_bonus * (1.0 - near_goal_ratio)
 
-        # progress-based shaping: reward for getting closer, penalize moving away
-        progress = self._prev_dist_to_goal - dist_to_goal
+        # Progress shaping uses planner-aware path distance when available.
+        # This reduces local oscillation traps near walls/obstacles.
+        progress = self._prev_path_dist_to_goal - path_dist_to_goal
         reward += progress * self.progress_scale
         if in_near_goal_zone:
             self._no_progress_steps = 0
@@ -473,6 +478,27 @@ class CrowdNavEnv(gym.Env):
             reward += penalty_scale * self.wall_scrape_penalty * self._last_blocked_axes
 
         return reward
+
+    def _path_distance_to_goal(self, euclidean_dist_to_goal: float) -> float:
+        if (
+            self.nav_grid is None
+            or self.robot is None
+            or self.goal_pos is None
+        ):
+            return euclidean_dist_to_goal
+
+        start = (self.robot.x, self.robot.y)
+        goal = (float(self.goal_pos[0]), float(self.goal_pos[1]))
+        path = self.nav_grid.find_path(start, goal)
+        if not path:
+            return euclidean_dist_to_goal
+
+        total = 0.0
+        prev_x, prev_y = start
+        for px, py in path:
+            total += float(np.hypot(px - prev_x, py - prev_y))
+            prev_x, prev_y = px, py
+        return max(euclidean_dist_to_goal, total)
 
     def _blocking_penalty(self, ped: Pedestrian, dist: float) -> float:
         if dist >= self.blocking_radius:
@@ -640,7 +666,9 @@ class CrowdNavEnv(gym.Env):
                 self.pedestrians,
                 self.scenario.obstacles,
             )
-            if hit_type not in (1, 3) or dist >= self.wall_approach_radius:
+            # Penalize steering into obstacle faces, but do not penalize
+            # approaching the outer map boundary itself.
+            if hit_type != 1 or dist >= self.wall_approach_radius:
                 continue
 
             closeness = 1.0 - (dist / self.wall_approach_radius)
