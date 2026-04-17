@@ -12,7 +12,7 @@ class Robot:
     speed: float = speed_mps_to_px_per_step(3.0)
     radius: int = 12
 
-    def draw(self, surface: pygame.Surface) -> None:
+    def draw(self, surface):
         pygame.draw.circle(
             surface,
             ROBOT_COLOR,
@@ -20,17 +20,13 @@ class Robot:
             self.radius,
         )
 
-    def move(self, delta: pygame.Vector2) -> None:
+    def move(self, delta):
         self.x += delta.x
         self.y += delta.y
         self.x = max(self.radius, min(WIDTH - self.radius, self.x))
         self.y = max(self.radius, min(HEIGHT - self.radius, self.y))
 
-    def move_with_obstacles(
-        self,
-        delta: pygame.Vector2,
-        obstacles: list[pygame.Rect],
-    ) -> int:
+    def move_with_obstacles(self, delta, obstacles):
         old_x, old_y = self.x, self.y
         blocked_axes = 0
 
@@ -57,7 +53,7 @@ class Robot:
 
         return blocked_axes
 
-    def _collides_any(self, obstacles: list[pygame.Rect]) -> bool:
+    def _collides_any(self, obstacles):
         hitbox = pygame.Rect(
             int(self.x - self.radius),
             int(self.y - self.radius),

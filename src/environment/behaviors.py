@@ -1,24 +1,12 @@
-"""Pedestrian behavior strategies for different scenarios."""
-
 from abc import ABC, abstractmethod
 import math
-import pygame
-import numpy as np
 
 from constants import HEIGHT, WIDTH, SIM_SECONDS_PER_STEP
 
 
 class PedestrianBehavior(ABC):
-    """Base class for pedestrian movement behaviors."""
-
     @abstractmethod
-    def update(
-        self,
-        pedestrian: "Pedestrian",
-        others: list["Pedestrian"],
-        obstacles: list[pygame.Rect] | None = None,
-        rng: np.random.Generator | None = None,
-    ) -> None:
+    def update(self, pedestrian, others, obstacles = None, rng = None):
         """Update pedestrian velocity and position based on behavior."""
         pass
 
@@ -26,13 +14,7 @@ class PedestrianBehavior(ABC):
 class SocialForceBehavior(PedestrianBehavior):
     """Classic social force model (current default behavior)."""
 
-    def update(
-        self,
-        pedestrian: "Pedestrian",
-        others: list["Pedestrian"],
-        obstacles: list[pygame.Rect] | None = None,
-        rng: np.random.Generator | None = None,
-    ) -> None:
+    def update(self, pedestrian, others, obstacles = None, rng = None):
         f1x, f1y = pedestrian._self_driving_force()
         f2x, f2y = pedestrian._pedestrian_repulsion(others)
         f3x, f3y = pedestrian._wall_repulsion()
@@ -54,17 +36,11 @@ class SocialForceBehavior(PedestrianBehavior):
 class StationaryBehavior(PedestrianBehavior):
     """Mostly stationary with infrequent goal updates."""
 
-    def __init__(self, movement_probability: float = 0.08):
+    def __init__(self, movement_probability = 0.08):
         self.movement_probability = movement_probability
         self.stationary_frame_count = 0
 
-    def update(
-        self,
-        pedestrian: "Pedestrian",
-        others: list["Pedestrian"],
-        obstacles: list[pygame.Rect] | None = None,
-        rng: np.random.Generator | None = None,
-    ) -> None:
+    def update(self, pedestrian, others, obstacles = None, rng = None):
         # Slowly decay velocity toward zero
         pedestrian.vx *= 0.95
         pedestrian.vy *= 0.95
@@ -93,16 +69,10 @@ class StationaryBehavior(PedestrianBehavior):
 class RandomWalkerBehavior(PedestrianBehavior):
     """Move toward random goals across entire screen at increased speed."""
 
-    def __init__(self, speed_multiplier: float = 2.0):
+    def __init__(self, speed_multiplier = 2.0):
         self.speed_multiplier = speed_multiplier
 
-    def update(
-        self,
-        pedestrian: "Pedestrian",
-        others: list["Pedestrian"],
-        obstacles: list[pygame.Rect] | None = None,
-        rng: np.random.Generator | None = None,
-    ) -> None:
+    def update(self, pedestrian, others, obstacles = None, rng = None):
         # Move toward current waypoint with increased speed
         tx, ty = pedestrian.get_steering_target()
         dx = tx - pedestrian.x
@@ -140,14 +110,7 @@ class RandomWalkerBehavior(PedestrianBehavior):
 class FamilyGroupBehavior(PedestrianBehavior):
     """Keeps a small group moving together toward a shared edge goal."""
 
-    def __init__(
-        self,
-        cohesion_strength: float = 0.9,
-        alignment_strength: float = 0.18,
-        separation_strength: float = 0.28,
-        wander_strength: float = 0.2,
-        wander_interval: int = 35,
-    ):
+    def __init__(self, cohesion_strength = 0.9, alignment_strength = 0.18, separation_strength = 0.28, wander_strength = 0.2, wander_interval = 35):
         self.cohesion_strength = cohesion_strength
         self.alignment_strength = alignment_strength
         self.separation_strength = separation_strength
@@ -156,13 +119,7 @@ class FamilyGroupBehavior(PedestrianBehavior):
         self.frame_count = 0
         self._wander_angle = 0.0
 
-    def update(
-        self,
-        pedestrian: "Pedestrian",
-        others: list["Pedestrian"],
-        obstacles: list[pygame.Rect] | None = None,
-        rng: np.random.Generator | None = None,
-    ) -> None:
+    def update(self, pedestrian, others, obstacles = None, rng = None):
         self.frame_count += 1
         if rng is not None and (
             self.frame_count == 1 or self.frame_count % self.wander_interval == 0
@@ -251,16 +208,10 @@ class FamilyGroupBehavior(PedestrianBehavior):
 class ClumpBehavior(PedestrianBehavior):
     """Move together in groups toward goal."""
 
-    def __init__(self, clump_radius: float = 120.0):
+    def __init__(self, clump_radius = 120.0):
         self.clump_radius = clump_radius
 
-    def update(
-        self,
-        pedestrian: "Pedestrian",
-        others: list["Pedestrian"],
-        obstacles: list[pygame.Rect] | None = None,
-        rng: np.random.Generator | None = None,
-    ) -> None:
+    def update(self, pedestrian, others, obstacles = None, rng = None):
         # Self-driving force toward current waypoint (reduced)
         tx, ty = pedestrian.get_steering_target()
         dx = tx - pedestrian.x
@@ -333,7 +284,7 @@ class ClumpBehavior(PedestrianBehavior):
 class ZigzagBehavior(PedestrianBehavior):
     """Zigzag across space frequently, changing direction."""
 
-    def __init__(self, direction_change_frames: int = 30):
+    def __init__(self, direction_change_frames = 30):
         self.direction_change_frames = direction_change_frames
         self.frame_count = 0
         self._target_offset = 0.0
@@ -341,13 +292,7 @@ class ZigzagBehavior(PedestrianBehavior):
         self._max_offset = 0.38
         self._velocity_blend = 0.22
 
-    def update(
-        self,
-        pedestrian: "Pedestrian",
-        others: list["Pedestrian"],
-        obstacles: list[pygame.Rect] | None = None,
-        rng: np.random.Generator | None = None,
-    ) -> None:
+    def update(self, pedestrian, others, obstacles = None, rng = None):
         self.frame_count += 1
 
         # Smoothly drift around the goal heading instead of abrupt heading resets.
@@ -404,18 +349,15 @@ _TTC_COMFORT_MARGIN_PX = 8.0
 _TTC_FORCE_SCALE = 1.2
 
 # Track how long each pedestrian has been stuck (keyed by id)
-_stuck_counters: dict[int, tuple[float, float, int, int]] = {}
-_velocity_history: dict[int, tuple[float, float]] = {}
+_stuck_counters = {}
+_velocity_history = {}
 _VELOCITY_SMOOTHING = 0.14      # mild blend with last frame to reduce jitter
 _STUCK_THRESHOLD_FRAMES = 75    # frames before considered stuck
 _STUCK_MOVE_THRESHOLD = 2.0     # px of movement to consider "not stuck"
 _STUCK_KICK_COOLDOWN = 30       # frames before another random kick is allowed
 
 
-def _ttc_avoidance_force(
-    pedestrian: "Pedestrian",
-    others: list["Pedestrian"],
-) -> tuple[float, float]:
+def _ttc_avoidance_force(pedestrian, others):
     """
     Anticipatory side-step force using short-horizon time-to-collision (TTC).
     Keeps trajectories smoother than pure distance-based repulsion.
@@ -479,11 +421,7 @@ def _ttc_avoidance_force(
     return fx, fy
 
 
-def _apply_velocity_limits(
-    pedestrian: "Pedestrian",
-    prev_vx: float,
-    prev_vy: float,
-) -> None:
+def _apply_velocity_limits(pedestrian, prev_vx, prev_vy):
     """Limit acceleration and turn rate to reduce oscillatory motion."""
     # 1) Acceleration cap (limit delta-v magnitude per step).
     dvx = pedestrian.vx - prev_vx
@@ -519,11 +457,7 @@ def _apply_velocity_limits(
         pedestrian.vy = pedestrian.vy / speed * max_speed
 
 
-def _apply_movement(
-    pedestrian: "Pedestrian",
-    obstacles: list[pygame.Rect] | None = None,
-    rng: np.random.Generator | None = None,
-) -> None:
+def _apply_movement(pedestrian, obstacles = None, rng = None):
     """Apply velocity to position with collision handling and stuck recovery."""
     pid = id(pedestrian)
     prev_vx, prev_vy = _velocity_history.get(pid, (pedestrian.vx, pedestrian.vy))

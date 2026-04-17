@@ -1,7 +1,3 @@
-"""Evaluate a trained crowd navigation agent with optional visual rendering."""
-
-from __future__ import annotations
-
 import argparse
 import csv
 import json
@@ -14,7 +10,7 @@ import numpy as np
 from crowd_env import ACTION_VECTORS, CrowdNavEnv
 from wrappers import ObservationStackWrapper
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     p = argparse.ArgumentParser(description="Evaluate a trained crowd navigation agent")
     p.add_argument(
         "--model",
@@ -39,7 +35,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def load_run_config(model_path: Path) -> dict:
+def load_run_config(model_path):
     candidate_paths = [
         model_path.parent / "run_config.json",
         model_path.parent.parent / "run_config.json",
@@ -50,7 +46,7 @@ def load_run_config(model_path: Path) -> dict:
     return {}
 
 
-def _parse_hidden_sizes(raw: object, default: tuple[int, ...] = (256, 256)) -> tuple[int, ...]:
+def _parse_hidden_sizes(raw, default = (256, 256)):
     if isinstance(raw, str):
         values = [x.strip() for x in raw.split(",") if x.strip()]
         if not values:
@@ -62,11 +58,11 @@ def _parse_hidden_sizes(raw: object, default: tuple[int, ...] = (256, 256)) -> t
     return default
 
 
-def _safe_div(num: float, denom: float) -> float:
+def _safe_div(num, denom):
     return float(num / denom) if denom > 1e-9 else 0.0
 
 
-def _path_length(points: list[tuple[float, float]]) -> float:
+def _path_length(points):
     if len(points) < 2:
         return 0.0
     total = 0.0
@@ -75,7 +71,7 @@ def _path_length(points: list[tuple[float, float]]) -> float:
     return float(total)
 
 
-def _shortest_path_length(env_unwrapped: CrowdNavEnv) -> float:
+def _shortest_path_length(env_unwrapped):
     if env_unwrapped.nav_grid is None or env_unwrapped.robot is None or env_unwrapped.goal_pos is None:
         return float("nan")
     start = (env_unwrapped.robot.x, env_unwrapped.robot.y)
@@ -84,7 +80,7 @@ def _shortest_path_length(env_unwrapped: CrowdNavEnv) -> float:
     return _path_length([start, *path])
 
 
-def _action_heading(action: int) -> float | None:
+def _action_heading(action):
     if action < 0 or action >= len(ACTION_VECTORS):
         return None
     dx, dy = ACTION_VECTORS[action]
@@ -93,7 +89,7 @@ def _action_heading(action: int) -> float | None:
     return float(math.atan2(dy, dx))
 
 
-def main() -> None:
+def main():
     args = parse_args()
 
     repo_root = Path(__file__).resolve().parent.parent
@@ -189,7 +185,7 @@ def main() -> None:
     episode_action_switch_rate = []
     episode_mean_turn_deg = []
     episode_max_turn_deg = []
-    episode_rows: list[dict[str, object]] = []
+    episode_rows = []
 
     for ep in range(args.episodes):
         obs, info = env.reset()
@@ -199,9 +195,9 @@ def main() -> None:
         shortest_path = _shortest_path_length(env_unwrapped)
         actual_path = 0.0
         action_switches = 0
-        prev_action: int | None = None
-        prev_heading: float | None = None
-        turn_angles_deg: list[float] = []
+        prev_action = None
+        prev_heading = None
+        turn_angles_deg = []
 
         total_reward = 0.0
         total_collisions = 0

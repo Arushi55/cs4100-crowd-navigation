@@ -1,20 +1,10 @@
-"""Wrapper environment that randomizes scenario, pedestrian count, and speed each episode."""
-
-from __future__ import annotations
-
 import gymnasium as gym
 import numpy as np
 
 from crowd_env import CrowdNavEnv
 
 
-def _sample_pedestrian_count(
-    rng: np.random.Generator,
-    ped_count_range: tuple[int, int],
-    anchors: tuple[int, ...],
-    anchor_prob: float,
-    anchor_jitter: int,
-) -> int:
+def _sample_pedestrian_count(rng, ped_count_range, anchors, anchor_prob, anchor_jitter):
     lo, hi = ped_count_range
     if lo > hi:
         lo, hi = hi, lo
@@ -43,18 +33,7 @@ class VariablePedestrianEnv(gym.Env):
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
 
-    def __init__(
-        self,
-        scenario_id: str = "airport",
-        ped_count_range: tuple[int, int] = (6, 20),
-        ped_count_anchors: tuple[int, ...] = (),
-        ped_count_anchor_prob: float = 0.0,
-        ped_count_anchor_jitter: int = 5,
-        speed_range: tuple[float, float] = (1.0, 1.0),
-        max_steps: int = 1200,
-        seed: int | None = None,
-        render_mode: str | None = None,
-    ):
+    def __init__(self, scenario_id = "airport", ped_count_range = (6, 20), ped_count_anchors = (), ped_count_anchor_prob = 0.0, ped_count_anchor_jitter = 5, speed_range = (1.0, 1.0), max_steps = 1200, seed = None, render_mode = None):
         super().__init__()
 
         self.scenario_id = scenario_id
@@ -143,18 +122,7 @@ class MultiScenarioEnv(gym.Env):
 
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
 
-    def __init__(
-        self,
-        scenarios: list[str] | None = None,
-        ped_count_range: tuple[int, int] = (6, 20),
-        ped_count_anchors: tuple[int, ...] = (),
-        ped_count_anchor_prob: float = 0.0,
-        ped_count_anchor_jitter: int = 5,
-        speed_range: tuple[float, float] = (1.0, 2.5),
-        max_steps: int = 1200,
-        seed: int | None = None,
-        render_mode: str | None = None,
-    ):
+    def __init__(self, scenarios = None, ped_count_range = (6, 20), ped_count_anchors = (), ped_count_anchor_prob = 0.0, ped_count_anchor_jitter = 5, speed_range = (1.0, 2.5), max_steps = 1200, seed = None, render_mode = None):
         super().__init__()
 
         self.scenarios = scenarios or ["airport", "home", "shopping_center"]

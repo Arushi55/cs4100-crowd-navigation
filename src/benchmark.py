@@ -1,6 +1,4 @@
-"""Benchmark: test trained agent against varying pedestrian count and speed."""
 
-from __future__ import annotations
 
 import json
 import sys
@@ -11,7 +9,7 @@ import numpy as np
 from crowd_env import CrowdNavEnv
 from wrappers import ObservationStackWrapper
 
-def _parse_hidden_sizes(raw: object, default: tuple[int, ...] = (256, 256)) -> tuple[int, ...]:
+def _parse_hidden_sizes(raw, default = (256, 256)):
     if isinstance(raw, str):
         values = [x.strip() for x in raw.split(",") if x.strip()]
         if not values:
@@ -23,15 +21,7 @@ def _parse_hidden_sizes(raw: object, default: tuple[int, ...] = (256, 256)) -> t
     return default
 
 
-def run_benchmark(
-    model_path: str,
-    scenario: str = "airport",
-    ped_counts: list[int] | None = None,
-    speed_multipliers: list[float] | None = None,
-    episodes: int = 20,
-    max_steps: int = 1200,
-    seed: int = 99,
-) -> None:
+def run_benchmark(model_path, scenario = "airport", ped_counts = None, speed_multipliers = None, episodes = 20, max_steps = 1200, seed = 99):
     if ped_counts is None:
         ped_counts = [4, 8, 12, 16, 24, 32]
     if speed_multipliers is None:
@@ -72,7 +62,7 @@ def run_benchmark(
     q_net.load_state_dict(checkpoint["q_net"])
     q_net.eval()
 
-    def action_fn(obs: np.ndarray) -> int:
+    def action_fn(obs):
         obs_t = torch.as_tensor(obs, device=device, dtype=torch.float32).unsqueeze(0)
         return int(torch.argmax(q_net(obs_t), dim=1).item())
 
@@ -158,7 +148,7 @@ def run_benchmark(
     print(f"{'=' * 80}")
 
 
-def load_run_config(model_path: Path) -> dict:
+def load_run_config(model_path):
     candidate_paths = [
         model_path.parent / "run_config.json",
         model_path.parent.parent / "run_config.json",
@@ -169,16 +159,7 @@ def load_run_config(model_path: Path) -> dict:
     return {}
 
 
-def _evaluate(
-    action_fn,
-    scenario: str,
-    n_peds: int,
-    speed_mult: float,
-    episodes: int,
-    max_steps: int,
-    seed: int,
-    frame_stack: int,
-) -> dict:
+def _evaluate(action_fn, scenario, n_peds, speed_mult, episodes, max_steps, seed, frame_stack):
     env = CrowdNavEnv(
         scenario_id=scenario,
         num_pedestrians=n_peds,

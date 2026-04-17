@@ -1,7 +1,3 @@
-"""Train/eval harness for per-scenario DQN experiments."""
-
-from __future__ import annotations
-
 import argparse
 import shlex
 import subprocess
@@ -13,7 +9,7 @@ DEFAULT_SCENARIOS = ("airport", "home", "shopping_center")
 DEFAULT_EVAL_PEDS = (0, 30, 100)
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     p = argparse.ArgumentParser(
         description=(
             "Train one DQN model per scenario, then evaluate each model at "
@@ -85,13 +81,13 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def _run(cmd: list[str], cwd: Path) -> None:
+def _run(cmd, cwd):
     printable = " ".join(shlex.quote(part) for part in cmd)
     print(f"\n$ {printable}")
     subprocess.run(cmd, cwd=str(cwd), check=True)
 
 
-def _resolve_output_dir(repo_root: Path, raw_path: Path) -> Path:
+def _resolve_output_dir(repo_root, raw_path):
     """
     Resolve user-provided output directories relative to this script's folder.
 
@@ -110,7 +106,7 @@ def _resolve_output_dir(repo_root: Path, raw_path: Path) -> Path:
     return (repo_root / raw_path).resolve()
 
 
-def train_scenario(args: argparse.Namespace, repo_root: Path, scenario: str, model_dir: Path) -> Path:
+def train_scenario(args, repo_root, scenario, model_dir):
     model_dir.mkdir(parents=True, exist_ok=True)
     model_path = model_dir / "dqn.pt"
 
@@ -162,13 +158,7 @@ def train_scenario(args: argparse.Namespace, repo_root: Path, scenario: str, mod
     return model_path
 
 
-def eval_scenario(
-    args: argparse.Namespace,
-    repo_root: Path,
-    scenario: str,
-    model_path: Path,
-    results_dir: Path,
-) -> None:
+def eval_scenario(args, repo_root, scenario, model_path, results_dir):
     results_dir.mkdir(parents=True, exist_ok=True)
 
     for ped_count in args.eval_pedestrians:
@@ -193,7 +183,7 @@ def eval_scenario(
         _run(cmd, cwd=repo_root)
 
 
-def main() -> None:
+def main():
     args = parse_args()
     repo_root = Path(__file__).resolve().parent
 

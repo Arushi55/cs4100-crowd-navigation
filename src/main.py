@@ -1,6 +1,3 @@
-"""Minimal pygame simulation loop for crowd-navigation experiments."""
-
-from __future__ import annotations
 import argparse
 import os
 from pathlib import Path
@@ -8,13 +5,10 @@ import pygame
 import numpy as np
 
 from constants import HEIGHT, WIDTH
-from environment.pedestrian import Pedestrian
 from environment.robot import Robot
 from environment.pathfinding import NavGrid
 from environment.scenarios import (
     SCENARIO_CONFIG_DIR,
-    Scenario,
-    ScenarioTemplate,
     build_scenario,
     generate_pedestrian_population,
     load_scenario_templates,
@@ -39,8 +33,13 @@ OVERLAP_PENALTY_LOW = 0.5
 OVERLAP_PENALTY_MID = 1.0
 OVERLAP_PENALTY_HIGH = 1.5
 
-# set control mode with enum value
-MODE = ControlMode.POTENTIAL_FIELD
+DEFAULT_MODE = "potential_field"
+CONTROL_MODE_BY_NAME = {
+    "manual": ControlMode.MANUAL,
+    "naive": ControlMode.NAIVE,
+    "random": ControlMode.RANDOM,
+    "potential_field": ControlMode.POTENTIAL_FIELD,
+}
 
 SHOW_RAY_TRACING = True
 
@@ -48,7 +47,7 @@ DEFAULT_SCENARIO_ID = "shopping_center"
 DEFAULT_SEED = 42
 
 
-def compute_penalty(robot: Robot, pedestrians: list[Pedestrian]) -> float:
+def compute_penalty(robot, pedestrians):
     frame_penalty = 0.0
 
     for ped in pedestrians:
@@ -69,7 +68,7 @@ def compute_penalty(robot: Robot, pedestrians: list[Pedestrian]) -> float:
     return frame_penalty
 
 
-def parse_args() -> argparse.Namespace:
+def parse_args():
     parser = argparse.ArgumentParser(description="Crowd navigation simulation")
     parser.add_argument(
         "--scenario",
@@ -102,6 +101,13 @@ def parse_args() -> argparse.Namespace:
         help="Randomize obstacle layouts per scenario template and episode.",
     )
     parser.add_argument(
+        "--mode",
+        type=str,
+        choices=sorted(CONTROL_MODE_BY_NAME.keys()),
+        default=os.getenv("CROWD_SIM_MODE", DEFAULT_MODE),
+        help="Robot control mode.",
+    )
+    parser.add_argument(
         "--scenario-config-dir",
         type=str,
         default=os.getenv("CROWD_SIM_SCENARIO_DIR", str(SCENARIO_CONFIG_DIR)),
@@ -110,7 +116,7 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def init_rng(seed: int | None, random_seed: bool) -> tuple[np.random.Generator, int]:
+def init_rng(seed, random_seed):
     if random_seed:
         seed_sequence = np.random.SeedSequence()
         entropy = int(seed_sequence.entropy)
@@ -119,13 +125,7 @@ def init_rng(seed: int | None, random_seed: bool) -> tuple[np.random.Generator, 
     return np.random.default_rng(chosen_seed), chosen_seed
 
 
-def generate_pedestrians(
-    scenario: Scenario,
-    template: ScenarioTemplate,
-    nav_grid: NavGrid,
-    rng: np.random.Generator,
-    count: int = 12,
-) -> list[Pedestrian]:
+def generate_pedestrians(scenario, template, nav_grid, rng, count = 12):
     return generate_pedestrian_population(
         scenario,
         template,
@@ -135,17 +135,12 @@ def generate_pedestrians(
     )
 
 
-def draw_scenario(screen: pygame.Surface, scenario: Scenario) -> None:
+def draw_scenario(screen, scenario):
     for obstacle in scenario.obstacles:
         pygame.draw.rect(screen, OBSTACLE_COLOR, obstacle, border_radius=4)
 
 
-def build_episode_state(
-    template: ScenarioTemplate,
-    rng: np.random.Generator,
-    pedestrian_count: int,
-    random_world: bool,
-) -> tuple[Scenario, NavGrid, Robot, list[Pedestrian], pygame.Vector2]:
+def build_episode_state(template, rng, pedestrian_count, random_world):
     scenario = build_scenario(template, rng, randomize_world=random_world)
     nav_grid = NavGrid(WIDTH, HEIGHT, scenario.obstacles)
     robot = Robot(x=scenario.robot_start[0], y=scenario.robot_start[1])
@@ -154,8 +149,9 @@ def build_episode_state(
     return scenario, nav_grid, robot, pedestrians, goal_pos
 
 
-def run() -> None:
+def run():
     args = parse_args()
+    control_mode = CONTROL_MODE_BY_NAME[args.mode]
     rng, used_seed = init_rng(seed=args.seed, random_seed=args.random_seed)
     templates = load_scenario_templates(Path(args.scenario_config_dir))
     scenario_ids = list(templates.keys())
@@ -194,8 +190,8 @@ def run() -> None:
     steps = 0
     total_penalties = []
     total_steps = []
-    goal_dwell_frames: dict[int, int] = {}
-    pending_perimeter_respawn: set[int] = set()
+    goal_dwell_frames = {}
+    pending_perimeter_respawn = set()
     flow_pedestrian_ids = select_flow_pedestrians(pedestrians, current_scenario_id, rng)
 
     running = True
@@ -243,7 +239,7 @@ def run() -> None:
             visible_pedestrians = pedestrians
 
         keys = pygame.key.get_pressed()
-        move = BEHAVIORS[MODE](robot, goal_pos, visible_pedestrians, keys)
+        move = BEHAVIORS[control_mode](robot, goal_pos, visible_pedestrians, keys)
         steps += 1
 
         if move.length_squared() > 0:
@@ -322,7 +318,7 @@ def run() -> None:
         )
         screen.blit(scenario_label, (20, 52))
         seed_label = sub_font.render(
-            f"Seed: {used_seed} | random_world={args.random_world}",
+            f"Seed: {used_seed} | mode={args.mode} | random_world={args.random_world}",
             True,
             SCENARIO_TEXT_COLOR,
         )

@@ -1,5 +1,3 @@
-"""Ray-based sensor for partial observability."""
-
 import math
 import numpy as np
 import pygame
@@ -11,20 +9,7 @@ HIT_WALL = 3
 
 
 class RaySensor:
-    """
-    casts rays from robot position and reports distances/type
-    
-    observation per ray: [distance (normalized), hit_type (one-hot or int)]
-    """
-    
-    def __init__(
-        self,
-        num_rays: int = 36,
-        max_range: float = 150.0,
-        fov_degrees: float = 360.0,
-        screen_width: int = 960,
-        screen_height: int = 640,
-    ):
+    def __init__(self, num_rays=36, max_range=150.0, fov_degrees=360.0, screen_width=960, screen_height=640):
         self.num_rays = num_rays
         self.max_range = max_range
         self.fov = math.radians(fov_degrees)
@@ -42,18 +27,7 @@ class RaySensor:
                 for i in range(num_rays)
             ]
     
-    def cast_rays(
-        self,
-        robot_x: float,
-        robot_y: float,
-        pedestrians: list,
-        obstacles: list[pygame.Rect],
-    ) -> np.ndarray:
-        """
-        cast all rays and return observations.
-        
-        returns: array of shape (num_rays, 2) with [normalized_dist, hit_type]
-        """
+    def cast_rays(self, robot_x, robot_y, pedestrians, obstacles):
         results = []
         
         for angle in self.angles:
@@ -65,24 +39,10 @@ class RaySensor:
         
         return np.array(results, dtype=np.float32)
     
-    def cast_rays_flat(
-        self,
-        robot_x: float,
-        robot_y: float,
-        pedestrians: list,
-        obstacles: list[pygame.Rect],
-    ) -> np.ndarray:
-        """returns flattened observation vector."""
+    def cast_rays_flat(self, robot_x, robot_y, pedestrians, obstacles):
         return self.cast_rays(robot_x, robot_y, pedestrians, obstacles).flatten()
     
-    def get_visible_pedestrians(
-        self,
-        robot_x: float,
-        robot_y: float,
-        pedestrians: list,
-        obstacles: list[pygame.Rect],
-    ) -> list:
-        """return pedestrians that are hit by at least one ray."""
+    def get_visible_pedestrians(self, robot_x, robot_y, pedestrians, obstacles):
         visible_ids = set()
         visible = []
         
@@ -103,16 +63,7 @@ class RaySensor:
         
         return visible
 
-    def _cast_single_ray(
-        self,
-        ox: float,
-        oy: float,
-        angle: float,
-        pedestrians: list,
-        obstacles: list[pygame.Rect],
-    ) -> tuple[float, int]:
-        """cast one ray, return (distance, hit_type)."""
-        
+    def _cast_single_ray(self, ox, oy, angle, pedestrians, obstacles):
         dx = math.cos(angle)
         dy = math.sin(angle)
         
@@ -141,8 +92,7 @@ class RaySensor:
         
         return closest_dist, closest_type
     
-    def _ray_vs_walls(self, ox: float, oy: float, dx: float, dy: float) -> float:
-        """distance to screen boundary."""
+    def _ray_vs_walls(self, ox, oy, dx, dy):
         dists = []
         
         # left wall (x = 0)
@@ -160,14 +110,7 @@ class RaySensor:
         
         return min(dists) if dists else self.max_range
     
-    def _ray_vs_rect(
-        self,
-        ox: float, oy: float,
-        dx: float, dy: float,
-        rect: pygame.Rect,
-    ) -> float | None:
-        """ray-rectangle intersection using slab method."""
-        
+    def _ray_vs_rect(self, ox, oy, dx, dy, rect):
         # avoid division by zero
         if abs(dx) < 1e-9:
             dx = 1e-9 if dx >= 0 else -1e-9
@@ -193,15 +136,7 @@ class RaySensor:
         
         return t
     
-    def _ray_vs_circle(
-        self,
-        ox: float, oy: float,
-        dx: float, dy: float,
-        cx: float, cy: float,
-        radius: float,
-    ) -> float | None:
-        """ray-circle intersection."""
-        
+    def _ray_vs_circle(self, ox, oy, dx, dy, cx, cy,radius):
         # vector from ray origin to circle center
         fx = ox - cx
         fy = oy - cy
@@ -226,16 +161,7 @@ class RaySensor:
         
         return None
     
-    def get_ray_endpoints(
-        self,
-        robot_x: float,
-        robot_y: float,
-        pedestrians: list,
-        obstacles: list[pygame.Rect],
-    ) -> list[tuple[float, float, float, float, int]]:
-        """
-        for vis: returns list of (start_x, start_y, end_x, end_y, hit_type)
-        """
+    def get_ray_endpoints(self, robot_x, robot_y, pedestrians, obstacles):
         endpoints = []
         
         for angle in self.angles:
@@ -249,12 +175,7 @@ class RaySensor:
         return endpoints
 
 
-def draw_rays(
-    surface: pygame.Surface,
-    endpoints: list[tuple[float, float, float, float, int]],
-    alpha: int = 80,
-):
-    """draw rays on a pygame surface for debugging"""
+def draw_rays(surface, endpoints, alpha=80):
     colors = {
         HIT_NOTHING: (100, 100, 100),
         HIT_OBSTACLE: (200, 100, 50),

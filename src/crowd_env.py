@@ -1,18 +1,12 @@
-"""Gymnasium environment for crowd navigation."""
-
-from pathlib import Path
-
 import gymnasium as gym
 import numpy as np
 import pygame
 
 from constants import HEIGHT, WIDTH, SIM_FPS
-from environment.pedestrian import Pedestrian
 from environment.robot import Robot
 from environment.pathfinding import NavGrid
 from environment.scenarios import (
     SCENARIO_CONFIG_DIR,
-    Scenario,
     build_scenario,
     generate_pedestrian_population,
     load_scenario_templates,
@@ -50,17 +44,7 @@ class CrowdNavEnv(gym.Env):
     
     metadata = {"render_modes": ["human", "rgb_array"], "render_fps": 60}
 
-    def __init__(
-        self,
-        scenario_id: str = "airport",
-        num_pedestrians: int = 12,
-        max_observed_pedestrians: int = 6,
-        max_steps: int = 1000,
-        seed: int | None = None,
-        random_world: bool = False,
-        render_mode: str | None = None,
-        scenario_config_dir: Path = SCENARIO_CONFIG_DIR,
-    ):
+    def __init__(self, scenario_id = "airport", num_pedestrians = 12, max_observed_pedestrians = 6, max_steps = 1000, seed = None, random_world = False, render_mode = None, scenario_config_dir = SCENARIO_CONFIG_DIR):
         super().__init__()
         
         self.scenario_id = scenario_id
@@ -130,11 +114,11 @@ class CrowdNavEnv(gym.Env):
         self.near_goal_proximity_bonus = 0.3
 
         # state
-        self.scenario: Scenario | None = None
-        self.nav_grid: NavGrid | None = None
-        self.robot: Robot | None = None
-        self.pedestrians: list[Pedestrian] = []
-        self.goal_pos: tuple[float, float] | None = None
+        self.scenario = None
+        self.nav_grid = None
+        self.robot = None
+        self.pedestrians = []
+        self.goal_pos = None
         self.current_step = 0
         self._prev_dist_to_goal = 0.0      # for progress-based shaping
         self._prev_path_dist_to_goal = 0.0
@@ -148,9 +132,9 @@ class CrowdNavEnv(gym.Env):
         self._last_actual_move = np.zeros(2, dtype=np.float32)
         self._last_turn_penalty = 0.0
         self._quit_requested = False
-        self._ped_goal_dwell_frames: dict[int, int] = {}
-        self._ped_pending_perimeter_respawn: set[int] = set()
-        self._flow_pedestrian_ids: set[int] = set()
+        self._ped_goal_dwell_frames = {}
+        self._ped_pending_perimeter_respawn = set()
+        self._flow_pedestrian_ids = set()
         self._no_progress_steps = 0
 
         self.screen = None
@@ -201,7 +185,7 @@ class CrowdNavEnv(gym.Env):
         
         return observation, info
 
-    def step(self, action: int):
+    def step(self, action):
         assert self.robot is not None
         assert self.scenario is not None
 
@@ -300,7 +284,7 @@ class CrowdNavEnv(gym.Env):
         
         return observation, reward, terminated, truncated, info
 
-    def _generate_pedestrians(self) -> list[Pedestrian]:
+    def _generate_pedestrians(self):
         return generate_pedestrian_population(
             self.scenario,
             self.template,
@@ -322,7 +306,7 @@ class CrowdNavEnv(gym.Env):
             sim_fps=SIM_FPS,
         )
 
-    def _get_observation(self) -> np.ndarray:
+    def _get_observation(self):
         ray_obs = self.ray_sensor.cast_rays_flat(
             self.robot.x, self.robot.y,
             self.pedestrians, self.scenario.obstacles
@@ -338,7 +322,7 @@ class CrowdNavEnv(gym.Env):
         
         return np.concatenate([base_obs, ray_obs, ped_context])
 
-    def _pedestrian_context_features(self) -> np.ndarray:
+    def _pedestrian_context_features(self):
         visible = self.ray_sensor.get_visible_pedestrians(
             self.robot.x,
             self.robot.y,
@@ -350,7 +334,7 @@ class CrowdNavEnv(gym.Env):
         max_rel_dist = self.ray_sensor.max_range
         max_rel_speed = 4.0
         default_entry = np.array([0.5, 0.5, 0.5, 0.5, 1.0], dtype=np.float32)
-        features: list[np.ndarray] = []
+        features = []
 
         for ped in visible[:self.max_observed_pedestrians]:
             rel_x = ped.x - self.robot.x
@@ -372,13 +356,13 @@ class CrowdNavEnv(gym.Env):
         return np.concatenate(features, dtype=np.float32)
 
     @staticmethod
-    def _encode_signed(value: float, scale: float) -> float:
+    def _encode_signed(value, scale):
         if scale <= 1e-6:
             return 0.5
         normalized = np.clip(value / scale, -1.0, 1.0)
         return float((normalized + 1.0) * 0.5)
 
-    def _smoothed_action_move(self, desired_move: np.ndarray) -> np.ndarray:
+    def _smoothed_action_move(self, desired_move):
         desired_norm = np.hypot(desired_move[0], desired_move[1])
         if desired_norm < 1e-6:
             return np.zeros(2, dtype=np.float32)
@@ -400,7 +384,7 @@ class CrowdNavEnv(gym.Env):
             blended_dir = blended_dir / blended_norm
         return blended_dir.astype(np.float32) * self.robot.speed
 
-    def _turn_penalty(self, move: np.ndarray) -> float:
+    def _turn_penalty(self, move):
         move_norm = np.hypot(move[0], move[1])
         prev_norm = np.hypot(self._last_actual_move[0], self._last_actual_move[1])
         if move_norm < 1e-6 or prev_norm < 1e-6:
@@ -415,7 +399,7 @@ class CrowdNavEnv(gym.Env):
         sharpness = 0.5 * (1.0 - alignment)
         return self.turn_penalty_scale * (sharpness ** 2)
 
-    def _compute_reward(self, dist_to_goal: float, path_dist_to_goal: float) -> float:
+    def _compute_reward(self, dist_to_goal, path_dist_to_goal):
         """compute step reward (goal reward added separately in step())."""
         reward = self.step_penalty
 
@@ -500,7 +484,7 @@ class CrowdNavEnv(gym.Env):
 
         return reward
 
-    def _path_distance_to_goal(self, euclidean_dist_to_goal: float) -> float:
+    def _path_distance_to_goal(self, euclidean_dist_to_goal):
         if (
             self.nav_grid is None
             or self.robot is None
@@ -521,7 +505,7 @@ class CrowdNavEnv(gym.Env):
             prev_x, prev_y = px, py
         return max(euclidean_dist_to_goal, total)
 
-    def _blocking_penalty(self, ped: Pedestrian, dist: float) -> float:
+    def _blocking_penalty(self, ped, dist):
         if dist >= self.blocking_radius:
             return 0.0
 
@@ -549,22 +533,17 @@ class CrowdNavEnv(gym.Env):
         lateral_scale = 1.0 - (lateral_dist / self.blocking_path_width)
         return self.blocking_penalty_scale * forward_scale * lateral_scale
 
-    def _goal_contact_radius(self) -> float:
+    def _goal_contact_radius(self):
         return self.goal_visual_radius + self.robot.radius
 
-    def _near_miss_penalty(self, dist: float, overlap_dist: float) -> float:
+    def _near_miss_penalty(self, dist, overlap_dist):
         if dist <= overlap_dist or dist >= self.near_miss_radius:
             return 0.0
         span = max(1e-6, self.near_miss_radius - overlap_dist)
         closeness = 1.0 - ((dist - overlap_dist) / span)
         return self.near_miss_penalty * (closeness ** 2)
 
-    def _pedestrian_slowdown_penalty(
-        self,
-        ped: Pedestrian,
-        dist: float,
-        blocking_penalty: float,
-    ) -> float:
+    def _pedestrian_slowdown_penalty(self, ped, dist, blocking_penalty):
         if dist >= self.slowdown_penalty_radius:
             return 0.0
 
@@ -584,7 +563,7 @@ class CrowdNavEnv(gym.Env):
         pressure = max(proximity * 0.35, blocking_strength) * slowdown
         return self.slowdown_penalty_scale * pressure
 
-    def _social_metrics_snapshot(self) -> dict[str, float]:
+    def _social_metrics_snapshot(self):
         near_misses = 0
         personal_space_intrusions = 0
         pedestrian_slowdown = 0.0
@@ -619,7 +598,7 @@ class CrowdNavEnv(gym.Env):
             "blocking_pressure": blocking_pressure,
         }
 
-    def _crowd_pressure_penalty(self) -> float:
+    def _crowd_pressure_penalty(self):
         local_pressure = 0.0
         close_neighbors = 0
         for ped in self.pedestrians:
@@ -635,7 +614,7 @@ class CrowdNavEnv(gym.Env):
         # Penalize entering dense clumps much more than passing one isolated pedestrian.
         return self.crowd_pressure_scale * local_pressure * (1.0 + 0.25 * (close_neighbors - 1))
 
-    def _crowd_approach_penalty(self) -> float:
+    def _crowd_approach_penalty(self):
         move_norm = np.hypot(self._last_move[0], self._last_move[1])
         if move_norm < 1e-6:
             return 0.0
@@ -665,7 +644,7 @@ class CrowdNavEnv(gym.Env):
 
         return self.crowd_approach_scale * pressure * (1.0 + 0.18 * (forward_neighbors - 1))
 
-    def _wall_approach_penalty(self) -> float:
+    def _wall_approach_penalty(self):
         move_norm = np.hypot(self._last_move[0], self._last_move[1])
         if move_norm < 1e-6:
             return 0.0
@@ -701,7 +680,7 @@ class CrowdNavEnv(gym.Env):
 
         return self.wall_approach_scale * pressure * (1.0 + 0.12 * (forward_hits - 1))
 
-    def _boundary_distance(self) -> float:
+    def _boundary_distance(self):
         return min(
             self.robot.x - self.robot.radius,
             WIDTH - self.robot.radius - self.robot.x,
@@ -709,7 +688,7 @@ class CrowdNavEnv(gym.Env):
             HEIGHT - self.robot.radius - self.robot.y,
         )
 
-    def _nearest_obstacle_distance(self) -> float:
+    def _nearest_obstacle_distance(self):
         obstacle_dist = float("inf")
         for rect in self.scenario.obstacles:
             closest_x = max(rect.left, min(self.robot.x, rect.right))
@@ -720,10 +699,10 @@ class CrowdNavEnv(gym.Env):
             )
         return max(0.0, obstacle_dist)
 
-    def _nearest_wall_distance(self) -> float:
+    def _nearest_wall_distance(self):
         return min(self._boundary_distance(), self._nearest_obstacle_distance())
 
-    def _count_collisions(self) -> int:
+    def _count_collisions(self):
         """Count how many pedestrians the robot is currently colliding with."""
         count = 0
         for ped in self.pedestrians:

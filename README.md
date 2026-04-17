@@ -42,6 +42,7 @@ Useful flags:
 - `--random-seed`
 - `--random-world`
 - `--pedestrians <int>`
+- `--mode {manual|potential_field|naive|random}`
 - `--scenario-config-dir <path>`
 
 Examples:
@@ -49,13 +50,17 @@ Examples:
 ```bash
 python src/main.py --scenario airport --pedestrians 24 --seed 42
 python src/main.py --scenario home --random-seed --random-world
+python src/main.py --scenario airport --pedestrians 24 --mode manual
 ```
+
+Default simulator mode is `potential_field`. Use `--mode manual` for keyboard control.
 
 Controls:
 
-- `WASD` or arrow keys move the robot in manual mode
+- `WASD` or arrow keys move the robot in `manual` mode
 - `1`, `2`, `3` switch scenarios
-- close the pygame window to exit
+- `Q` or `Esc` exits
+- closing the pygame window also exits
 
 ## RL training workflow (DQN-first)
 

@@ -1,14 +1,9 @@
-"""Minimal DQN training loop using PyTorch (no stable-baselines3)."""
-
-from __future__ import annotations
-
 import argparse
 import collections
 import os
 import random
 import json
 from pathlib import Path
-from typing import Tuple
 
 import numpy as np
 import torch
@@ -20,21 +15,9 @@ from crowd_env import CrowdNavEnv
 from multi_env import MultiScenarioEnv, VariablePedestrianEnv
 from wrappers import ObservationStackWrapper
 
-
-# ---------------------------------------------------------------------------
 # Replay buffer
-# ---------------------------------------------------------------------------
 class ReplayBuffer:
-    def __init__(
-        self,
-        capacity: int,
-        obs_dim: int,
-        device: torch.device,
-        prioritized: bool = False,
-        alpha: float = 0.6,
-        n_step: int = 1,
-        gamma: float = 0.99,
-    ):
+    def __init__(self, capacity, obs_dim, device, prioritized = False, alpha = 0.6, n_step = 1, gamma = 0.99):
         self.capacity = capacity
         self.device = device
         self.obs = np.zeros((capacity, obs_dim), dtype=np.float32)
@@ -50,12 +33,12 @@ class ReplayBuffer:
 
         self.n_step = n_step
         self.gamma = gamma
-        self.n_step_buffer: collections.deque = collections.deque(maxlen=n_step)
+        self.n_step_buffer = collections.deque(maxlen=n_step)
 
         self.idx = 0
         self.full = False
 
-    def add(self, obs: np.ndarray, action: int, reward: float, next_obs: np.ndarray, done: bool) -> None:
+    def add(self, obs, action, reward, next_obs, done):
         if self.n_step == 1:
             self._store(obs, action, reward, next_obs, done)
             if done:
@@ -74,7 +57,7 @@ class ReplayBuffer:
             while len(self.n_step_buffer) > 1:
                 self._store_n_step_transition()
 
-    def _store_n_step_transition(self) -> None:
+    def _store_n_step_transition(self):
         if not self.n_step_buffer:
             return
 
@@ -89,7 +72,7 @@ class ReplayBuffer:
         self._store(first_obs, first_action, reward, next_obs, done)
         self.n_step_buffer.popleft()
 
-    def _store(self, obs: np.ndarray, action: int, reward: float, next_obs: np.ndarray, done: bool) -> None:
+    def _store(self, obs, action, reward, next_obs, done):
         self.obs[self.idx] = obs
         self.next_obs[self.idx] = next_obs
         self.actions[self.idx] = action
@@ -104,10 +87,10 @@ class ReplayBuffer:
         if self.idx == 0:
             self.full = True
 
-    def __len__(self) -> int:
+    def __len__(self):
         return self.capacity if self.full else self.idx
 
-    def sample(self, batch_size: int, beta: float = 0.4):
+    def sample(self, batch_size, beta = 0.4):
         max_idx = self.capacity if self.full else self.idx
         if max_idx == 0:
             raise ValueError("Trying to sample from empty buffer")
@@ -132,29 +115,20 @@ class ReplayBuffer:
 
         return batch_obs, batch_actions, batch_rewards, batch_next_obs, batch_dones, weights, idxs
 
-    def update_priorities(self, idxs: np.ndarray, priorities: np.ndarray) -> None:
+    def update_priorities(self, idxs, priorities):
         if not self.prioritized:
             return
         self.priorities[idxs] = priorities
 
 
-# ---------------------------------------------------------------------------
 # Q-network
-# ---------------------------------------------------------------------------
 class QNetwork(nn.Module):
-    def __init__(
-        self,
-        obs_dim: int,
-        action_dim: int,
-        hidden_sizes: tuple[int, ...] = (256, 256),
-        activation: str = "relu",
-        dueling: bool = False,
-    ):
+    def __init__(self, obs_dim, action_dim, hidden_sizes = (256, 256), activation = "relu", dueling = False):
         super().__init__()
 
         self.dueling = dueling
         if not dueling:
-            layers: list[nn.Module] = []
+            layers = []
             last_size = obs_dim
             for h in hidden_sizes:
                 layers.append(nn.Linear(last_size, h))
@@ -170,7 +144,7 @@ class QNetwork(nn.Module):
             layers.append(nn.Linear(last_size, action_dim))
             self.net = nn.Sequential(*layers)
         else:
-            fc_layers: list[nn.Module] = []
+            fc_layers = []
             last_size = obs_dim
             for h in hidden_sizes:
                 fc_layers.append(nn.Linear(last_size, h))
@@ -187,7 +161,7 @@ class QNetwork(nn.Module):
             self.value_stream = nn.Sequential(nn.Linear(last_size, 1))
             self.adv_stream = nn.Sequential(nn.Linear(last_size, action_dim))
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
+    def forward(self, x):
         if not self.dueling:
             return self.net(x)
 
@@ -198,22 +172,20 @@ class QNetwork(nn.Module):
         return value + advantage - advantage_mean
 
 
-# ---------------------------------------------------------------------------
 # Environment helpers
-# ---------------------------------------------------------------------------
-def _parse_anchor_counts(raw: str) -> tuple[int, ...]:
+def _parse_anchor_counts(raw):
     text = str(raw).strip()
     if not text:
         return ()
-    values: list[int] = []
+    values = []
     for token in text.split(","):
         token = token.strip()
         if not token:
             continue
         values.append(int(token))
     # Preserve order but remove duplicates.
-    seen: set[int] = set()
-    deduped: list[int] = []
+    seen = set()
+    deduped = []
     for v in values:
         if v not in seen:
             seen.add(v)
@@ -221,7 +193,7 @@ def _parse_anchor_counts(raw: str) -> tuple[int, ...]:
     return tuple(deduped)
 
 
-def make_base_env(args: argparse.Namespace, seed: int, render_mode: str | None = None):
+def make_base_env(args, seed, render_mode = None):
     ped_count_anchors = _parse_anchor_counts(args.ped_count_anchors)
     if args.multi_scenario:
         return MultiScenarioEnv(
@@ -255,14 +227,14 @@ def make_base_env(args: argparse.Namespace, seed: int, render_mode: str | None =
     )
 
 
-def make_env(args: argparse.Namespace, seed: int, render_mode: str | None = None):
+def make_env(args, seed, render_mode = None):
     env = make_base_env(args, seed=seed, render_mode=render_mode)
     if args.frame_stack > 1:
         env = ObservationStackWrapper(env, stack_size=args.frame_stack)
     return env
 
 
-def save_run_config(output_dir: Path, args: argparse.Namespace) -> None:
+def save_run_config(output_dir, args):
     run_config = {
         "algo": "dqn",
         "scenario": args.scenario,
@@ -301,11 +273,9 @@ def save_run_config(output_dir: Path, args: argparse.Namespace) -> None:
     )
 
 
-# ---------------------------------------------------------------------------
 # Training loop
-# ---------------------------------------------------------------------------
 @torch.no_grad()
-def select_action(q_net: QNetwork, obs: np.ndarray, action_dim: int, epsilon: float, device: torch.device) -> int:
+def select_action(q_net, obs, action_dim, epsilon, device):
     if random.random() < epsilon:
         return random.randrange(action_dim)
     obs_t = torch.as_tensor(obs, device=device, dtype=torch.float32).unsqueeze(0)
@@ -313,21 +283,21 @@ def select_action(q_net: QNetwork, obs: np.ndarray, action_dim: int, epsilon: fl
     return int(torch.argmax(q_values, dim=1).item())
 
 
-def linear_schedule(start: float, end: float, current_step: int, decay_steps: int) -> float:
+def linear_schedule(start, end, current_step, decay_steps):
     if decay_steps <= 0:
         return end
     fraction = min(1.0, current_step / float(decay_steps))
     return start + fraction * (end - start)
 
 
-def exponential_schedule(start: float, end: float, current_step: int, decay_steps: int) -> float:
+def exponential_schedule(start, end, current_step, decay_steps):
     if decay_steps <= 0:
         return end
     decay = float(current_step) / float(decay_steps)
     return end + (start - end) * np.exp(-5.0 * decay)
 
 
-def epsilon_schedule(args: argparse.Namespace, step: int) -> float:
+def epsilon_schedule(args, step):
     if args.eps_schedule == "linear":
         return linear_schedule(args.eps_start, args.eps_end, step, args.eps_decay_steps)
     if args.eps_schedule == "exponential":
@@ -343,7 +313,7 @@ def epsilon_schedule(args: argparse.Namespace, step: int) -> float:
     raise ValueError(f"Unsupported eps schedule: {args.eps_schedule}")
 
 
-def train(args: argparse.Namespace) -> None:
+def train(args):
     device = torch.device("cuda" if torch.cuda.is_available() and not args.cpu else "cpu")
     print(f"Using device: {device}")
 
@@ -468,17 +438,7 @@ def train(args: argparse.Namespace) -> None:
     progress.close()
 
 
-def compute_td_loss(
-    q_net: QNetwork,
-    target_net: QNetwork,
-    optimizer: torch.optim.Optimizer,
-    batch: Tuple[torch.Tensor, ...],
-    gamma: float,
-    max_grad_norm: float,
-    loss_fn: str,
-    double_dqn: bool = False,
-    weights: torch.Tensor | None = None,
-):
+def compute_td_loss(q_net, target_net, optimizer, batch, gamma, max_grad_norm, loss_fn, double_dqn = False, weights = None):
     obs, actions, rewards, next_obs, dones = batch
 
     q_values = q_net(obs).gather(1, actions.view(-1, 1)).squeeze(1)
@@ -514,10 +474,8 @@ def compute_td_loss(
     return loss, td_errors
 
 
-# ---------------------------------------------------------------------------
 # CLI
-# ---------------------------------------------------------------------------
-def parse_args() -> argparse.Namespace:
+def parse_args():
     p = argparse.ArgumentParser(description="DQN trainer with PyTorch")
     p.add_argument("--scenario", type=str, default="airport", help="Scenario id")
     p.add_argument("--pedestrians", type=int, default=12, help="Number of pedestrians")
@@ -581,7 +539,7 @@ def parse_args() -> argparse.Namespace:
     return p.parse_args()
 
 
-def main() -> None:
+def main():
     args = parse_args()
     random.seed(args.seed)
     np.random.seed(args.seed)

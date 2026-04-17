@@ -10,7 +10,6 @@ class ControlMode(Enum):
 
 
 def get_manual_move(robot, goal_pos, pedestrians, keys):
-    """Keyboard-controlled movement."""
     move = pygame.Vector2(0, 0)
     if keys[pygame.K_w] or keys[pygame.K_UP]:
         move.y -= 1
@@ -24,7 +23,6 @@ def get_manual_move(robot, goal_pos, pedestrians, keys):
 
 
 def get_naive_move(robot, goal_pos, pedestrians, keys):
-    """Move directly toward goal, ignoring pedestrians."""
     direction = pygame.Vector2(goal_pos.x - robot.x, goal_pos.y - robot.y)
     if direction.length_squared() > 0:
         return direction.normalize()
@@ -32,7 +30,6 @@ def get_naive_move(robot, goal_pos, pedestrians, keys):
 
 
 def get_random_move(robot, goal_pos, pedestrians, keys):
-    """Random movement in any direction."""
     return pygame.Vector2(
         random.choice([-1, 0, 1]),
         random.choice([-1, 0, 1]),
@@ -40,7 +37,6 @@ def get_random_move(robot, goal_pos, pedestrians, keys):
 
 
 def get_potential_field_move(robot, goal_pos, pedestrians, keys):
-    """Potential field: attracted to goal, repelled by pedestrians."""
     ATTRACT_STRENGTH = 1.0
     REPEL_STRENGTH = 50.0
     REPEL_RADIUS = 60.0

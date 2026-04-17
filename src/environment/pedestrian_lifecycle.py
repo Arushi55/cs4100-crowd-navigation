@@ -1,12 +1,8 @@
-from __future__ import annotations
 
 import numpy as np
 
 from constants import HEIGHT, WIDTH
-from environment.pathfinding import NavGrid
-from environment.pedestrian import Pedestrian
 from environment.scenarios import (
-    Scenario,
     random_point_in_region,
     random_pedestrian_route,
     respawn_family_group_members,
@@ -64,11 +60,7 @@ GOAL_REGION_TRANSITION_WEIGHTS = {
 _SAME_REGION_WEIGHT_SCALE = 0.35
 
 
-def select_flow_pedestrians(
-    pedestrians: list[Pedestrian],
-    scenario_id: str,
-    rng: np.random.Generator,
-) -> set[int]:
+def select_flow_pedestrians(pedestrians, scenario_id, rng):
     ratio = float(PERIMETER_FLOW_RATIO_BY_SCENARIO.get(scenario_id, 0.15))
     ratio = max(0.0, min(1.0, ratio))
     candidates = [ped for ped in pedestrians if ped.group_id is None]
@@ -82,20 +74,14 @@ def select_flow_pedestrians(
     return {id(candidates[int(i)]) for i in np.atleast_1d(selected)}
 
 
-def goal_region_index_for_point(scenario: Scenario, x: float, y: float) -> int | None:
+def goal_region_index_for_point(scenario, x, y):
     for idx, region in enumerate(scenario.pedestrian_goal_regions):
         if region.collidepoint(x, y):
             return idx
     return None
 
 
-def sample_goal_dwell_frames(
-    ped: Pedestrian,
-    scenario: Scenario,
-    scenario_id: str,
-    rng: np.random.Generator,
-    sim_fps: int,
-) -> int:
+def sample_goal_dwell_frames(ped, scenario, scenario_id, rng, sim_fps):
     lo_sec, hi_sec = GOAL_DWELL_SECONDS_RANGE
     scenario_overrides = GOAL_DWELL_SECONDS_BY_REGION.get(scenario_id)
     if scenario_overrides:
@@ -107,13 +93,7 @@ def sample_goal_dwell_frames(
     return int(rng.integers(lo, hi + 1))
 
 
-def sample_next_goal_region_index(
-    scenario: Scenario,
-    scenario_id: str,
-    current_region_idx: int | None,
-    allowed_region_indices: list[int],
-    rng: np.random.Generator,
-) -> int:
+def sample_next_goal_region_index(scenario, scenario_id, current_region_idx, allowed_region_indices, rng):
     if len(allowed_region_indices) == 1:
         return int(allowed_region_indices[0])
 
@@ -122,7 +102,7 @@ def sample_next_goal_region_index(
         if 0 <= current_region_idx < len(matrix):
             row = matrix[current_region_idx]
             if len(row) >= len(scenario.pedestrian_goal_regions):
-                raw_weights: list[float] = []
+                raw_weights = []
                 for idx in allowed_region_indices:
                     w = float(row[idx]) if 0 <= idx < len(row) else 0.0
                     if idx == current_region_idx:
@@ -147,12 +127,7 @@ def sample_next_goal_region_index(
     return int(allowed_region_indices[choice_idx])
 
 
-def sample_next_goal_point(
-    ped: Pedestrian,
-    scenario: Scenario,
-    scenario_id: str,
-    rng: np.random.Generator,
-) -> tuple[float, float]:
+def sample_next_goal_point(ped, scenario, scenario_id, rng):
     allowed = (
         list(ped.goal_region_indices)
         if ped.goal_region_indices is not None and len(ped.goal_region_indices) > 0
@@ -179,11 +154,7 @@ def sample_next_goal_point(
     return gx, gy
 
 
-def sample_perimeter_spawn(
-    ped: Pedestrian,
-    scenario: Scenario,
-    rng: np.random.Generator,
-) -> tuple[float, float]:
+def sample_perimeter_spawn(ped, scenario, rng):
     margin = ped.radius + 2.0
     obstacles = scenario.obstacles
     for _ in range(40):
@@ -205,18 +176,8 @@ def sample_perimeter_spawn(
     return ped.x, ped.y
 
 
-def reassign_reached_goals(
-    pedestrians: list[Pedestrian],
-    scenario: Scenario,
-    nav_grid: NavGrid,
-    rng: np.random.Generator,
-    scenario_id: str,
-    goal_dwell_frames: dict[int, int],
-    pending_perimeter_respawn: set[int],
-    flow_pedestrian_ids: set[int],
-    sim_fps: int,
-) -> None:
-    respawned_groups: set[int] = set()
+def reassign_reached_goals(pedestrians, scenario, nav_grid, rng, scenario_id, goal_dwell_frames, pending_perimeter_respawn, flow_pedestrian_ids, sim_fps):
+    respawned_groups = set()
     for ped in pedestrians:
         pid = id(ped)
         dwell_frames = goal_dwell_frames.get(pid, 0)

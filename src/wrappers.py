@@ -1,6 +1,5 @@
-"""Environment wrappers used for training and evaluation."""
+"""environment wrappers used for training and evaluation"""
 
-from __future__ import annotations
 
 from collections import deque
 
@@ -9,9 +8,8 @@ import numpy as np
 
 
 class ObservationStackWrapper(gym.Wrapper):
-    """Stack the last N flat observations to provide short-term motion context."""
 
-    def __init__(self, env: gym.Env, stack_size: int = 4):
+    def __init__(self, env, stack_size = 4):
         super().__init__(env)
         if stack_size < 1:
             raise ValueError("stack_size must be at least 1")
@@ -19,7 +17,7 @@ class ObservationStackWrapper(gym.Wrapper):
             raise TypeError("ObservationStackWrapper requires a Box observation space")
 
         self.stack_size = stack_size
-        self._frames: deque[np.ndarray] = deque(maxlen=stack_size)
+        self._frames = deque(maxlen=stack_size)
 
         base_space = env.observation_space
         low = np.tile(base_space.low, stack_size).astype(np.float32)
@@ -44,5 +42,5 @@ class ObservationStackWrapper(gym.Wrapper):
         self._frames.append(np.asarray(obs, dtype=np.float32))
         return self._stacked_observation(), reward, terminated, truncated, info
 
-    def _stacked_observation(self) -> np.ndarray:
+    def _stacked_observation(self):
         return np.concatenate(list(self._frames), dtype=np.float32)

@@ -1,14 +1,8 @@
 from dataclasses import dataclass, field
 import math
 import pygame
-import numpy as np
-from typing import TYPE_CHECKING
 
 from constants import HEIGHT, WIDTH, SIM_SECONDS_PER_STEP, WORLD_METERS_PER_PIXEL
-
-if TYPE_CHECKING:
-    from environment.behaviors import PedestrianBehavior
-    from environment.pathfinding import NavGrid
 
 PEDESTRIAN_COLOR = (10, 155, 110)
 GOAL_COLOR = (255, 200, 0)
@@ -50,15 +44,15 @@ class Pedestrian:
     obstacle_B: float = 10.0
     obstacle_range: float = 40.0
 
-    def desired_speed_step(self) -> float:
+    def desired_speed_step(self):
         """Desired cruising speed in px/step."""
         return self.desired_speed * SIM_SECONDS_PER_STEP / WORLD_METERS_PER_PIXEL
 
-    def max_speed_step(self) -> float:
+    def max_speed_step(self):
         """Maximum speed in px/step."""
         return self.max_speed * SIM_SECONDS_PER_STEP / WORLD_METERS_PER_PIXEL
 
-    def max_delta_v_step(self) -> float:
+    def max_delta_v_step(self):
         """Maximum change in velocity (px/step) allowed per simulation step."""
         return (
             self.max_acceleration_mps2
@@ -67,17 +61,11 @@ class Pedestrian:
             / WORLD_METERS_PER_PIXEL
         )
 
-    def max_turn_step_radians(self) -> float:
+    def max_turn_step_radians(self):
         """Maximum heading change in radians per simulation step."""
         return math.radians(self.max_turn_rate_deg_per_sec) * SIM_SECONDS_PER_STEP
 
-    def set_goal(
-        self,
-        gx: float,
-        gy: float,
-        nav_grid: "NavGrid | None" = None,
-        rng: np.random.Generator | None = None,
-    ) -> None:
+    def set_goal(self, gx, gy, nav_grid = None, rng = None):
         """Set the goal and compute a path using A* if a NavGrid is provided."""
         self.goal_x = gx
         self.goal_y = gy
@@ -85,7 +73,7 @@ class Pedestrian:
             raw_path = nav_grid.find_path((self.x, self.y), (gx, gy))
             # Add tiny random offsets so pedestrians don't follow identical lines
             if rng is not None and len(raw_path) > 1:
-                jittered: list[tuple[float, float]] = []
+                jittered = []
                 for i, (wx, wy) in enumerate(raw_path):
                     if i < len(raw_path) - 1:  # don't jitter the final goal
                         wx += float(rng.uniform(-4, 4))
@@ -98,7 +86,7 @@ class Pedestrian:
             self._waypoints = [(gx, gy)]
         self._waypoint_idx = 0
 
-    def get_steering_target(self) -> tuple[float, float]:
+    def get_steering_target(self):
         """Return the current waypoint to steer toward."""
         if not self._waypoints:
             return self.goal_x, self.goal_y
@@ -113,7 +101,7 @@ class Pedestrian:
 
         return self._waypoints[self._waypoint_idx]
 
-    def _self_driving_force(self) -> tuple[float, float]:
+    def _self_driving_force(self):
         """Social-force drive toward current waypoint (not final goal)."""
         tx, ty = self.get_steering_target()
         dx = tx - self.x
@@ -127,7 +115,7 @@ class Pedestrian:
         fy = (desired_speed * ey - self.vy) / self.relaxation_time
         return fx, fy
 
-    def _pedestrian_repulsion(self, others: list["Pedestrian"]) -> tuple[float, float]:
+    def _pedestrian_repulsion(self, others):
         fx, fy = 0.0, 0.0
         for other in others:
             if other is self:
@@ -146,7 +134,7 @@ class Pedestrian:
             fy += magnitude * ny
         return fx, fy
 
-    def _wall_repulsion(self) -> tuple[float, float]:
+    def _wall_repulsion(self):
         fx, fy = 0.0, 0.0
         walls = [
             (self.x,            1.0,  0.0),   # left
@@ -162,9 +150,7 @@ class Pedestrian:
             fy += magnitude * ny
         return fx, fy
 
-    def _obstacle_repulsion(
-        self, obstacles: list[pygame.Rect] | None
-    ) -> tuple[float, float]:
+    def _obstacle_repulsion(self, obstacles):
         """Repulsive force from nearby obstacles (walls, furniture, etc.)."""
         fx, fy = 0.0, 0.0
         if not obstacles:
@@ -194,19 +180,14 @@ class Pedestrian:
                 fy += magnitude * ny
         return fx, fy
     
-    def respawn(self, rng: np.random.Generator) -> None:
+    def respawn(self, rng):
         self.x = float(rng.uniform(self.radius, WIDTH - self.radius))
         self.y = HEIGHT + self.radius
         self.vx = 0.0
         self.vy = 0.0
         self.goal_x = float(rng.uniform(self.radius, WIDTH - self.radius))
 
-    def update(
-        self,
-        others: list["Pedestrian"],
-        obstacles: list[pygame.Rect] | None = None,
-        rng: np.random.Generator | None = None,
-    ) -> None:
+    def update(self, others, obstacles = None, rng = None):
         if self.behavior is not None:
             self.behavior.update(self, others, obstacles, rng)
         else:
@@ -215,10 +196,10 @@ class Pedestrian:
             default_behavior = SocialForceBehavior()
             default_behavior.update(self, others, obstacles, rng)
 
-    def has_reached_goal(self, threshold: float = 15.0) -> bool:
+    def has_reached_goal(self, threshold = 15.0):
         return math.hypot(self.goal_x - self.x, self.goal_y - self.y) < threshold
 
-    def _would_collide(self, x: float, y: float, obstacles: list[pygame.Rect]) -> bool:
+    def _would_collide(self, x, y, obstacles):
         hitbox = pygame.Rect(
             int(x - self.radius),
             int(y - self.radius),
@@ -227,7 +208,7 @@ class Pedestrian:
         )
         return any(hitbox.colliderect(obstacle) for obstacle in obstacles)
 
-    def draw(self, surface: pygame.Surface) -> None:
+    def draw(self, surface):
         # Draw waypoint path (faint)
         if self._waypoints and len(self._waypoints) > 1:
             pts = [(int(self.x), int(self.y))]

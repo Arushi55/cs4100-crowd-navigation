@@ -1,13 +1,8 @@
-"""A* pathfinding on a discretized navigation grid."""
-
-from __future__ import annotations
-
 import heapq
 import math
 from collections import deque
 
 import numpy as np
-import pygame
 
 CELL_SIZE = 10  # px per grid cell
 
@@ -20,13 +15,7 @@ class NavGrid:
     stays comfortably clear of walls.
     """
 
-    def __init__(
-        self,
-        width: int,
-        height: int,
-        obstacles: list[pygame.Rect],
-        inflate: int = 14,
-    ):
+    def __init__(self, width, height, obstacles, inflate = 14):
         self.cell_size = CELL_SIZE
         self.cols = width // CELL_SIZE + 1
         self.rows = height // CELL_SIZE + 1
@@ -47,23 +36,19 @@ class NavGrid:
     # Coordinate helpers
     # ------------------------------------------------------------------
 
-    def world_to_grid(self, x: float, y: float) -> tuple[int, int]:
+    def world_to_grid(self, x, y):
         c = max(0, min(self.cols - 1, int(x / self.cell_size)))
         r = max(0, min(self.rows - 1, int(y / self.cell_size)))
         return r, c
 
-    def grid_to_world(self, r: int, c: int) -> tuple[float, float]:
+    def grid_to_world(self, r, c):
         return (c + 0.5) * self.cell_size, (r + 0.5) * self.cell_size
 
     # ------------------------------------------------------------------
     # A* pathfinding
     # ------------------------------------------------------------------
 
-    def find_path(
-        self,
-        start: tuple[float, float],
-        goal: tuple[float, float],
-    ) -> list[tuple[float, float]]:
+    def find_path(self, start, goal):
         """Return a list of world-coordinate waypoints from *start* to *goal*."""
         sr, sc = self.world_to_grid(*start)
         gr, gc = self.world_to_grid(*goal)
@@ -88,18 +73,18 @@ class NavGrid:
             (1, 1, SQRT2),
         ]
 
-        open_set: list[tuple[float, int, int]] = []
+        open_set = []
         heapq.heappush(open_set, (0.0, sr, sc))
-        came_from: dict[tuple[int, int], tuple[int, int]] = {}
-        g_score: dict[tuple[int, int], float] = {(sr, sc): 0.0}
+        came_from = {}
+        g_score = {(sr, sc): 0.0}
 
         while open_set:
             _, cr, cc = heapq.heappop(open_set)
 
             if (cr, cc) == (gr, gc):
                 # Reconstruct and smooth
-                raw: list[tuple[float, float]] = []
-                node: tuple[int, int] = (gr, gc)
+                raw = []
+                node = (gr, gc)
                 while node in came_from:
                     raw.append(self.grid_to_world(*node))
                     node = came_from[node]
@@ -132,12 +117,12 @@ class NavGrid:
     # Helpers
     # ------------------------------------------------------------------
 
-    def _nearest_free(self, r: int, c: int) -> tuple[int, int]:
+    def _nearest_free(self, r, c):
         """BFS for nearest unblocked cell."""
         if not self.blocked[r, c]:
             return r, c
-        visited: set[tuple[int, int]] = {(r, c)}
-        queue: deque[tuple[int, int]] = deque([(r, c)])
+        visited = {(r, c)}
+        queue = deque([(r, c)])
         while queue:
             cr, cc = queue.popleft()
             for dr, dc in [(-1, 0), (1, 0), (0, -1), (0, 1)]:
@@ -149,9 +134,7 @@ class NavGrid:
                     queue.append((nr, nc))
         return r, c
 
-    def _smooth_path(
-        self, path: list[tuple[float, float]]
-    ) -> list[tuple[float, float]]:
+    def _smooth_path(self, path):
         """Remove redundant waypoints using line-of-sight checks."""
         if len(path) <= 2:
             return path
@@ -170,9 +153,7 @@ class NavGrid:
 
         return smoothed
 
-    def _line_of_sight(
-        self, a: tuple[float, float], b: tuple[float, float]
-    ) -> bool:
+    def _line_of_sight(self, a, b):
         """Check if the straight line between two world points is clear."""
         dx = b[0] - a[0]
         dy = b[1] - a[1]
